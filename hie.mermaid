@@ -1,0 +1,30 @@
+flowchart LR
+
+    Epic["EPIC FHIR / HL7 Events"]
+    EH["Azure Event Hub<br/>HL7 Base64"]
+
+    subgraph Fabric["Microsoft Fabric Real-Time Intelligence"]
+        ES["Eventstream"]
+
+        subgraph Eventhouse["Eventhouse"]
+            B["Bronze<br/>HL7 Base64"]
+            S["Silver<br/>HL7 JSON"]
+            G["Gold<br/>HL7 Row/Column"]
+
+            B --> S --> G
+            B -->|"1. Decode Base64 Parse HL7 Map to JSON"| S
+            S -->|"2. Update Policies"| G
+        end
+    end
+
+    Epic --> EH
+    EH --> ES
+    ES --> B
+
+    G --> PBI["Power BI"]
+    G --> API["APIs"]
+    G --> RT["Real-Time Dashboard"]
+    G --> Foundry["Foundry / Copilot"]
+    G --> Activator["Activator"]
+    Activator --> Alerts["Alerts"]
+    Alerts --> M365["Teams / Outlook"]
