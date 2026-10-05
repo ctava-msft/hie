@@ -1,0 +1,204 @@
+.create-merge table GoldFhirResource (
+    ResourceKey:string,
+    ResourceType:string,
+    FhirId:string,
+    FhirVersion:string,
+    ProfileCanonical:string,
+    PatientReference:string,
+    EncounterReference:string,
+    ClinicalStatusCode:string,
+    VerificationStatusCode:string,
+    CategoryCode:string,
+    CodeSystem:string,
+    Code:string,
+    Display:string,
+    EffectiveDateTime:datetime,
+    IssuedDateTime:datetime,
+    SourceHl7Version:string,
+    SourceMessageType:string,
+    SourceMessageControlId:string,
+    SourceEventId:string,
+    BronzeEventId:string,
+    SilverEventId:string,
+    MappingVersion:string,
+    UscdiVersion:string,
+    UscdiPlusDomain:string,
+    TerminologyVersion:string,
+    SecurityLabels:dynamic,
+    ResourceJson:dynamic,
+    EventTime:datetime,
+    IngestedAt:datetime
+)
+
+.create-merge table GoldPatient (
+    PatientId:string,
+    EnterprisePatientId:string,
+    IdentifierSystem:string,
+    IdentifierValue:string,
+    Active:bool,
+    BirthDate:datetime,
+    AdministrativeSexCode:string,
+    RaceCodes:dynamic,
+    EthnicityCodes:dynamic,
+    PreferredLanguageCode:string,
+    FhirProfileCanonical:string,
+    ResourceKey:string,
+    EventTime:datetime
+)
+
+.create-merge table GoldEncounter (
+    EncounterId:string,
+    PatientId:string,
+    StatusCode:string,
+    ClassSystem:string,
+    ClassCode:string,
+    TypeSystem:string,
+    TypeCode:string,
+    FacilityId:string,
+    ServiceProviderReference:string,
+    PeriodStart:datetime,
+    PeriodEnd:datetime,
+    AdmitSourceCode:string,
+    DischargeDispositionCode:string,
+    ReasonCodes:dynamic,
+    FhirProfileCanonical:string,
+    ResourceKey:string,
+    EventTime:datetime
+)
+
+.create-merge table GoldCondition (
+    ConditionId:string,
+    PatientId:string,
+    EncounterId:string,
+    ClinicalStatusCode:string,
+    VerificationStatusCode:string,
+    CategoryCode:string,
+    CodeSystem:string,
+    Code:string,
+    Display:string,
+    OnsetDateTime:datetime,
+    RecordedDate:datetime,
+    FhirProfileCanonical:string,
+    ResourceKey:string,
+    EventTime:datetime
+)
+
+.create-merge table GoldObservation (
+    ObservationId:string,
+    PatientId:string,
+    EncounterId:string,
+    StatusCode:string,
+    CategoryCode:string,
+    CodeSystem:string,
+    Code:string,
+    Display:string,
+    ValueQuantity:real,
+    ValueUnit:string,
+    ValueCodeSystem:string,
+    ValueCode:string,
+    ValueString:string,
+    InterpretationCodes:dynamic,
+    ReferenceRangeLow:real,
+    ReferenceRangeHigh:real,
+    EffectiveDateTime:datetime,
+    FhirProfileCanonical:string,
+    ResourceKey:string,
+    EventTime:datetime
+)
+
+.create-merge table GoldServiceRequest (
+    ServiceRequestId:string,
+    PatientId:string,
+    EncounterId:string,
+    StatusCode:string,
+    IntentCode:string,
+    CategoryCode:string,
+    CodeSystem:string,
+    Code:string,
+    Display:string,
+    AuthoredOn:datetime,
+    RequesterReference:string,
+    ReasonReferences:dynamic,
+    FhirProfileCanonical:string,
+    ResourceKey:string,
+    EventTime:datetime
+)
+
+.create-merge table GoldDiagnosticReport (
+    DiagnosticReportId:string,
+    PatientId:string,
+    EncounterId:string,
+    StatusCode:string,
+    CategoryCode:string,
+    CodeSystem:string,
+    Code:string,
+    Display:string,
+    EffectiveDateTime:datetime,
+    IssuedDateTime:datetime,
+    ResultReferences:dynamic,
+    Conclusion:string,
+    ConclusionCodes:dynamic,
+    FhirProfileCanonical:string,
+    ResourceKey:string,
+    EventTime:datetime
+)
+
+.create-merge table GoldProvenance (
+    ProvenanceId:string,
+    TargetResourceKeys:dynamic,
+    Recorded:datetime,
+    AgentTypeCode:string,
+    AgentReference:string,
+    ActivityCode:string,
+    SourceSystem:string,
+    SourceEventId:string,
+    SourceMessageControlId:string,
+    PayloadHash:string,
+    MappingVersion:string,
+    EventTime:datetime
+)
+
+.create-merge table EpnaMonitoringSignal (
+    AlertId:string,
+    EncounterId:string,
+    PatientReference:string,
+    FacilityId:string,
+    EncounterStatus:string,
+    EncounterClassCode:string,
+    MonitoringStatus:string,
+    AlertEligible:bool,
+    AlertScore:real,
+    AlertReasonCode:string,
+    AlertReasonDisplay:string,
+    SupportingResourceReferences:dynamic,
+    QualificationPolicyVersion:string,
+    EvaluatedAt:datetime,
+    EventTime:datetime,
+    SourceEventId:string,
+    CorrelationId:string
+)
+
+.create-or-alter function with (
+    folder = "ePNA",
+    docstring = "Latest clinician-approved alert-eligible signal for each active emergency encounter."
+) EpnaAlertCandidates() {
+    EpnaMonitoringSignal
+    | where EventTime > ago(5m)
+    | where AlertEligible == true
+    | where MonitoringStatus == "qualified"
+    | where EncounterStatus == "in-progress"
+    | where EncounterClassCode == "EMER"
+    | summarize arg_max(EventTime, *) by EncounterId
+    | project
+        EncounterId,
+        EventTime,
+        AlertScore,
+        AlertReasonCode,
+        AlertReasonDisplay,
+        FacilityId,
+        CorrelationId
+}
+
+.alter-merge table GoldFhirResource policy retention softdelete = 365d recoverability = enabled
+
+.alter-merge table EpnaMonitoringSignal policy retention softdelete = 30d recoverability = enabled

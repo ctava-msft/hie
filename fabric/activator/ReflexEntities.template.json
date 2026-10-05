@@ -1,0 +1,111 @@
+[
+  {
+    "uniqueIdentifier": "10000000-0000-4000-8000-000000000001",
+    "payload": {
+      "name": "ePNA Gold Eventhouse alerts",
+      "type": "kqlQueries"
+    },
+    "type": "container-v1"
+  },
+  {
+    "uniqueIdentifier": "10000000-0000-4000-8000-000000000002",
+    "payload": {
+      "name": "ePNA alert candidates",
+      "runSettings": {
+        "executionIntervalInSeconds": 60
+      },
+      "query": {
+        "queryString": "EpnaAlertCandidates()"
+      },
+      "eventhouseItem": {
+        "targetUniqueIdentifier": "__EVENTHOUSE_ITEM_ID__"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000001"
+      }
+    },
+    "type": "kqlSource-v1"
+  },
+  {
+    "uniqueIdentifier": "10000000-0000-4000-8000-000000000003",
+    "payload": {
+      "name": "Qualified ePNA encounter events",
+      "parentContainer": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000001"
+      },
+      "definition": {
+        "type": "Event",
+        "instance": "{\"templateId\":\"SourceEvent\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"SourceEventStep\",\"id\":\"20000000-0000-4000-8000-000000000001\",\"rows\":[{\"name\":\"SourceSelector\",\"kind\":\"SourceReference\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"10000000-0000-4000-8000-000000000002\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "10000000-0000-4000-8000-000000000004",
+    "payload": {
+      "name": "Emergency encounter",
+      "parentContainer": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000001"
+      },
+      "definition": {
+        "type": "Object"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "10000000-0000-4000-8000-000000000005",
+    "payload": {
+      "name": "EncounterId",
+      "parentObject": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000004"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000001"
+      },
+      "definition": {
+        "type": "Attribute",
+        "instance": "{\"templateId\":\"IdentityPartAttribute\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"IdPartStep\",\"id\":\"20000000-0000-4000-8000-000000000002\",\"rows\":[{\"name\":\"TypeAssertion\",\"kind\":\"TypeAssertion\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"Text\"},{\"name\":\"format\",\"type\":\"string\",\"value\":\"\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "10000000-0000-4000-8000-000000000006",
+    "payload": {
+      "name": "ePNA alert score",
+      "parentObject": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000004"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000001"
+      },
+      "definition": {
+        "type": "Attribute",
+        "instance": "{\"templateId\":\"BasicEventAttribute\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"EventSelectStep\",\"id\":\"20000000-0000-4000-8000-000000000003\",\"rows\":[{\"name\":\"EventSelector\",\"kind\":\"Event\",\"arguments\":[{\"kind\":\"EventReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"10000000-0000-4000-8000-000000000003\"}],\"name\":\"event\"}]},{\"name\":\"EventFieldSelector\",\"kind\":\"EventField\",\"arguments\":[{\"name\":\"fieldName\",\"type\":\"string\",\"value\":\"AlertScore\"}]}]},{\"name\":\"EventComputeStep\",\"id\":\"20000000-0000-4000-8000-000000000004\",\"rows\":[{\"name\":\"TypeAssertion\",\"kind\":\"TypeAssertion\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"Number\"},{\"name\":\"format\",\"type\":\"string\",\"value\":\"\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "10000000-0000-4000-8000-000000000007",
+    "payload": {
+      "name": "Qualified ePNA encounter",
+      "parentObject": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000004"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "10000000-0000-4000-8000-000000000001"
+      },
+      "definition": {
+        "type": "Rule",
+        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"20000000-0000-4000-8000-000000000005\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"10000000-0000-4000-8000-000000000006\"}],\"name\":\"attribute\"}]},{\"name\":\"NumberSummary\",\"kind\":\"NumberSummary\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"Maximum\"},{\"kind\":\"TimeDrivenWindowSpec\",\"type\":\"complex\",\"arguments\":[{\"name\":\"width\",\"type\":\"timeSpan\",\"value\":300000.0},{\"name\":\"hop\",\"type\":\"timeSpan\",\"value\":60000.0}],\"name\":\"window\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"20000000-0000-4000-8000-000000000006\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":0.5}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]},{\"name\":\"ActStep\",\"id\":\"20000000-0000-4000-8000-000000000007\",\"rows\":[{\"name\":\"EmailBinding\",\"kind\":\"EmailMessage\",\"arguments\":[{\"name\":\"messageLocale\",\"type\":\"string\",\"value\":\"en-us\"},{\"name\":\"sentTo\",\"type\":\"array\",\"values\":[{\"type\":\"string\",\"value\":\"__ALERT_RECIPIENT__\"}]},{\"name\":\"copyTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"bCCTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"subject\",\"type\":\"string\",\"value\":\"POC: qualified ePNA emergency encounter\"},{\"name\":\"headline\",\"type\":\"string\",\"value\":\"A clinician-approved ePNA qualification signal was received for an active emergency encounter.\"},{\"name\":\"optionalMessage\",\"type\":\"string\",\"value\":\"Review the governed ePNA workflow. Do not use this POC notification as a durable clinical delivery mechanism.\"},{\"name\":\"additionalInformation\",\"type\":\"string\",\"value\":\"The alert contains no direct patient identifier. Use authorized Fabric access for details.\"}]}]}]}",
+        "settings": {
+          "shouldRun": __RULE_ENABLED__,
+          "shouldApplyRuleOnUpdate": false
+        }
+      }
+    },
+    "type": "timeSeriesView-v1"
+  }
+]

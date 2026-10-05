@@ -1,0 +1,39 @@
+// Synthetic POC data only. Do not use real patient identifiers in test environments.
+.set-or-append EpnaMonitoringSignal <|
+datatable(
+    AlertId:string,
+    EncounterId:string,
+    PatientReference:string,
+    FacilityId:string,
+    EncounterStatus:string,
+    EncounterClassCode:string,
+    MonitoringStatus:string,
+    AlertEligible:bool,
+    AlertScore:real,
+    AlertReasonCode:string,
+    AlertReasonDisplay:string,
+    SupportingResourceReferences:dynamic,
+    QualificationPolicyVersion:string,
+    EvaluatedAt:datetime,
+    EventTime:datetime,
+    SourceEventId:string,
+    CorrelationId:string
+) [
+    "alert-0001",
+    "encounter-synthetic-0001",
+    "Patient/patient-synthetic-0001",
+    "facility-synthetic-ed",
+    "in-progress",
+    "EMER",
+    "qualified",
+    true,
+    1.0,
+    "epna-qualified",
+    "Clinician-approved ePNA qualification signal",
+    dynamic(["Condition/condition-synthetic-0001", "Observation/observation-synthetic-0001"]),
+    "epna-policy-poc-v1",
+    now(),
+    now(),
+    "event-synthetic-0001",
+    "correlation-synthetic-0001"
+]
