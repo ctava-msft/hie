@@ -1,0 +1,44 @@
+{
+  "syntheticOnly": true,
+  "fhirVersion": "4.0.1",
+  "phases": [
+    {
+      "name": "admission",
+      "bundle": "01-admission.bundle.json",
+      "events": "01-admission.events.ndjson",
+      "expectedActiveEncounters": []
+    },
+    {
+      "name": "qualification",
+      "bundle": "02-qualification.bundle.json",
+      "events": "02-qualification.events.ndjson",
+      "expectedActiveEncounters": [
+        "epna-e1",
+        "epna-e3"
+      ]
+    },
+    {
+      "name": "monitoring",
+      "bundle": "03-monitoring.bundle.json",
+      "events": "03-monitoring.events.ndjson",
+      "expectedActiveEncounters": [
+        "epna-e1",
+        "epna-e3"
+      ]
+    },
+    {
+      "name": "discharge",
+      "bundle": "04-discharge.bundle.json",
+      "events": "04-discharge.events.ndjson",
+      "expectedActiveEncounters": [
+        "epna-e3"
+      ]
+    },
+    {
+      "name": "transfer",
+      "bundle": "05-transfer.bundle.json",
+      "events": "05-transfer.events.ndjson",
+      "expectedActiveEncounters": []
+    }
+  ]
+}

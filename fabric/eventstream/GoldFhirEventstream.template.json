@@ -1,0 +1,34 @@
+{
+  "sources": [
+    {
+      "name": "gold-fhir-source",
+      "type": "CustomEndpoint",
+      "properties": {}
+    }
+  ],
+  "destinations": [
+    {
+      "name": "gold-eventhouse",
+      "type": "Eventhouse",
+      "properties": {
+        "dataIngestionMode": "DirectIngestion",
+        "workspaceId": "__WORKSPACE_ID__",
+        "itemId": "__EVENTHOUSE_ID__",
+        "tableName": "GoldFhirEvent",
+        "connectionName": "__CONNECTION_NAME__",
+        "mappingRuleName": "GoldFhirEventJson"
+      },
+      "inputNodes": [{"name": "gold-fhir-stream"}]
+    }
+  ],
+  "streams": [
+    {
+      "name": "gold-fhir-stream",
+      "type": "DefaultStream",
+      "properties": {},
+      "inputNodes": [{"name": "gold-fhir-source"}]
+    }
+  ],
+  "operators": [],
+  "compatibilityLevel": "1.1"
+}

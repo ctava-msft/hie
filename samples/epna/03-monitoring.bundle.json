@@ -1,0 +1,395 @@
+{
+  "resourceType": "Bundle",
+  "id": "epna-monitoring",
+  "type": "collection",
+  "meta": {
+    "tag": [
+      {
+        "system": "https://example.org/fhir/CodeSystem/data-origin",
+        "code": "synthetic"
+      }
+    ]
+  },
+  "timestamp": "2026-10-01T12:02:00Z",
+  "entry": [
+    {
+      "fullUrl": "https://example.org/fhir/Observation/epna-spo2",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epna-spo2",
+        "meta": {
+          "versionId": "2",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "59408-5"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "effectiveDateTime": "2026-10-01T12:02:00Z",
+        "valueQuantity": {
+          "value": 94,
+          "unit": "%",
+          "system": "http://unitsofmeasure.org",
+          "code": "%"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Observation/epna-heart-rate",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epna-heart-rate",
+        "meta": {
+          "versionId": "1",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8867-4"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "effectiveDateTime": "2026-10-01T12:02:00Z",
+        "valueQuantity": {
+          "value": 82,
+          "unit": "beats/minute",
+          "system": "http://unitsofmeasure.org",
+          "code": "/min"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Observation/epna-respiratory-rate",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epna-respiratory-rate",
+        "meta": {
+          "versionId": "1",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "9279-1"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "effectiveDateTime": "2026-10-01T12:02:00Z",
+        "valueQuantity": {
+          "value": 22,
+          "unit": "breaths/minute",
+          "system": "http://unitsofmeasure.org",
+          "code": "/min"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Observation/epna-temperature",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epna-temperature",
+        "meta": {
+          "versionId": "1",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8310-5"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "effectiveDateTime": "2026-10-01T12:02:00Z",
+        "valueQuantity": {
+          "value": 38.1,
+          "unit": "degrees C",
+          "system": "http://unitsofmeasure.org",
+          "code": "Cel"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Observation/epna-radiology",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epna-radiology",
+        "meta": {
+          "versionId": "1",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/epna-demo",
+              "code": "chest-radiograph-result"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "effectiveDateTime": "2026-10-01T12:02:00Z",
+        "valueString": "Synthetic radiology content for interoperability testing only.",
+        "basedOn": [
+          {
+            "reference": "ServiceRequest/epna-imaging-order"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/DiagnosticReport/epna-report",
+      "resource": {
+        "resourceType": "DiagnosticReport",
+        "id": "epna-report",
+        "meta": {
+          "versionId": "1",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/epna-demo",
+              "code": "chest-radiograph"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "effectiveDateTime": "2026-10-01T12:02:00Z",
+        "issued": "2026-10-01T12:02:00Z",
+        "basedOn": [
+          {
+            "reference": "ServiceRequest/epna-imaging-order"
+          }
+        ],
+        "result": [
+          {
+            "reference": "Observation/epna-radiology"
+          }
+        ],
+        "conclusion": "SYNTHETIC TEST DATA. No clinical interpretation or recommendation."
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/ServiceRequest/epna-imaging-order",
+      "resource": {
+        "resourceType": "ServiceRequest",
+        "id": "epna-imaging-order",
+        "meta": {
+          "versionId": "2",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "completed",
+        "intent": "order",
+        "code": {
+          "coding": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/epna-demo",
+              "code": "chest-radiograph",
+              "display": "Synthetic chest imaging order"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "authoredOn": "2026-10-01T12:01:00Z",
+        "reasonReference": [
+          {
+            "reference": "Condition/epna-condition"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Provenance/epna-provenance-monitoring",
+      "resource": {
+        "resourceType": "Provenance",
+        "id": "epna-provenance-monitoring",
+        "meta": {
+          "versionId": "1",
+          "lastUpdated": "2026-10-01T12:02:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "target": [
+          {
+            "reference": "Observation/epna-spo2"
+          },
+          {
+            "reference": "Observation/epna-heart-rate"
+          },
+          {
+            "reference": "Observation/epna-respiratory-rate"
+          },
+          {
+            "reference": "Observation/epna-temperature"
+          },
+          {
+            "reference": "Observation/epna-radiology"
+          },
+          {
+            "reference": "DiagnosticReport/epna-report"
+          },
+          {
+            "reference": "ServiceRequest/epna-imaging-order"
+          }
+        ],
+        "recorded": "2026-10-01T12:02:00Z",
+        "agent": [
+          {
+            "who": {
+              "identifier": {
+                "system": "https://example.org/fhir/identifier/test-agent",
+                "value": "epna-fixture-generator"
+              }
+            }
+          }
+        ],
+        "activity": {
+          "coding": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/epna-demo",
+              "code": "synthetic-fixture"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

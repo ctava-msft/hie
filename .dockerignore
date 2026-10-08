@@ -1,0 +1,9 @@
+**
+!services/
+!services/hapi-fhir/
+!services/hapi-fhir/pom.xml
+!services/hapi-fhir/src/
+!services/hapi-fhir/src/**
+!samples/
+!samples/epna/
+!samples/epna/**

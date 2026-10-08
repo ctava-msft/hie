@@ -5,6 +5,7 @@ param fabricDeploymentIdentityResourceId = '/subscriptions/00000000-0000-0000-00
 param workspaceDisplayName = 'hie-gold-poc'
 param eventhouseDisplayName = 'hie-gold-eventhouse'
 param kqlDatabaseDisplayName = 'hie_gold'
+param eventstreamDisplayName = 'hie-gold-fhir-events'
 param activatorDisplayName = 'epna-qualified-encounter-alert'
 param alertRecipient = 'poc-alert-owner@example.org'
 param enableActivatorRule = false

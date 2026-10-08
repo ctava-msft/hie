@@ -1,0 +1,24 @@
+// Run after all five phases in an isolated synthetic Gold database; every column must be true.
+let LatestResources = GoldFhirCurrent();
+let LatestSignals = EpnaMonitoringSignal | summarize arg_max(EventTime, *) by EncounterId;
+print
+    Patients = toscalar(LatestResources | where ResourceType == "Patient" | count) == 3,
+    Discharged = toscalar(LatestResources | where ResourceType == "Encounter" and FhirId == "epna-e1"
+        | project tostring(ResourceJson.status)) == "finished",
+    Transferred = toscalar(LatestResources | where ResourceType == "Encounter" and FhirId == "epna-e3"
+        | project tostring(ResourceJson.class.code)) == "IMP",
+    LatestObservation = toscalar(LatestResources | where ResourceType == "Observation" and FhirId == "epna-spo2"
+        | project tolong(ResourceJson.valueQuantity.value)) == 94,
+    MonitoringStopped = toscalar(LatestSignals | where AlertEligible == false
+        | where (EncounterId == "epna-e1" and MonitoringStatus == "discharged" and EncounterStatus == "finished")
+            or (EncounterId == "epna-e2" and MonitoringStatus == "not-qualified" and EncounterClassCode == "EMER")
+            or (EncounterId == "epna-e3" and MonitoringStatus == "transferred" and EncounterClassCode == "IMP")
+        | count) == 3,
+    NoRejectedEvents = toscalar(GoldFhirRejectedEvent | count) == 0,
+    PatientProjection = toscalar(GoldPatient | summarize by PatientId | count) == 3,
+    EncounterProjection = toscalar(GoldEncounter | summarize by EncounterId | count) == 3,
+    ConditionProjection = toscalar(GoldCondition | summarize by ConditionId | count) == 1,
+    ObservationProjection = toscalar(GoldObservation | summarize by ObservationId | count) == 8,
+    OrderProjection = toscalar(GoldServiceRequest | summarize by ServiceRequestId | count) == 1,
+    ReportProjection = toscalar(GoldDiagnosticReport | summarize by DiagnosticReportId | count) == 1,
+    ProvenanceProjection = toscalar(GoldProvenance | summarize by ProvenanceId | count) == 5

@@ -183,12 +183,12 @@
     docstring = "Latest clinician-approved alert-eligible signal for each active emergency encounter."
 ) EpnaAlertCandidates() {
     EpnaMonitoringSignal
+    | summarize arg_max(EventTime, *) by EncounterId
     | where EventTime > ago(5m)
     | where AlertEligible == true
     | where MonitoringStatus == "qualified"
     | where EncounterStatus == "in-progress"
     | where EncounterClassCode == "EMER"
-    | summarize arg_max(EventTime, *) by EncounterId
     | project
         EncounterId,
         EventTime,
@@ -202,3 +202,229 @@
 .alter-merge table GoldFhirResource policy retention softdelete = 365d recoverability = enabled
 
 .alter-merge table EpnaMonitoringSignal policy retention softdelete = 30d recoverability = enabled
+
+.create-or-alter function with (folder = "FHIR") GoldFhirCurrent() {
+    GoldFhirResource
+    | summarize arg_max(EventTime, *) by ResourceType, FhirId
+}
+
+.create-merge table GoldFhirEvent (
+    EventKind:string,
+    EventTime:datetime,
+    SourceEventId:string,
+    SourceMessageType:string,
+    Resource:dynamic,
+    Signal:dynamic
+)
+
+.create-or-alter table GoldFhirEvent ingestion json mapping 'GoldFhirEventJson'
+'[{"column":"EventKind","Properties":{"Path":"$.EventKind"}},{"column":"EventTime","Properties":{"Path":"$.EventTime"}},{"column":"SourceEventId","Properties":{"Path":"$.SourceEventId"}},{"column":"SourceMessageType","Properties":{"Path":"$.SourceMessageType"}},{"column":"Resource","Properties":{"Path":"$.Resource"}},{"column":"Signal","Properties":{"Path":"$.Signal"}}]'
+
+.create-merge table GoldFhirRejectedEvent (
+    SourceEventId:string,
+    EventTime:datetime,
+    EventKind:string,
+    RejectionReason:string
+)
+
+.create-or-alter function with (folder = "FHIR/Ingestion") ValidatedGoldFhirEvents() {
+    GoldFhirEvent
+    | extend RejectionReason = case(
+        isnull(EventTime) or isempty(SourceEventId), "Missing event time or source event ID",
+        EventKind !in ("resource", "monitoring"), "Unsupported event kind",
+        EventKind == "resource" and tostring(Resource.resourceType) !in
+            ("Patient", "Encounter", "Condition", "Observation", "ServiceRequest", "DiagnosticReport", "Provenance"),
+            "Unsupported resource type",
+        EventKind == "resource" and not(tostring(Resource.id) matches regex @"^[A-Za-z0-9.-]{1,64}$"),
+            "Invalid FHIR logical ID",
+        EventKind == "monitoring" and (isempty(tostring(Signal.EncounterId)) or isempty(tostring(Signal.PatientReference))
+            or isempty(tostring(Signal.QualificationPolicyVersion)) or isnull(todatetime(Signal.EvaluatedAt))
+            or gettype(Signal.AlertEligible) != "bool"),
+            "Missing monitoring identity, policy, evaluation time or boolean eligibility",
+        EventKind == "monitoring" and tostring(Signal.MonitoringStatus) !in
+            ("pending", "qualified", "not-qualified", "discharged", "transferred"),
+            "Unsupported monitoring state",
+        EventKind == "monitoring" and tobool(Signal.AlertEligible)
+            and (tostring(Signal.MonitoringStatus) != "qualified" or tostring(Signal.EncounterStatus) != "in-progress"
+                or tostring(Signal.EncounterClassCode) != "EMER"),
+            "Inconsistent alert eligibility",
+        "")
+}
+
+.create-or-alter function with (folder = "FHIR/Ingestion") ProjectGoldFhirResources() {
+    ValidatedGoldFhirEvents()
+    | where isempty(RejectionReason) and EventKind == "resource"
+    | project
+        ResourceKey = strcat(tostring(Resource.resourceType), "/", tostring(Resource.id)),
+        ResourceType = tostring(Resource.resourceType),
+        FhirId = tostring(Resource.id),
+        FhirVersion = "4.0.1",
+        ProfileCanonical = tostring(Resource.meta.profile[0]),
+        PatientReference = iff(tostring(Resource.resourceType) == "Patient", strcat("Patient/", tostring(Resource.id)),
+            coalesce(tostring(Resource.subject.reference), tostring(Resource.patient.reference))),
+        EncounterReference = iff(tostring(Resource.resourceType) == "Encounter", strcat("Encounter/", tostring(Resource.id)),
+            tostring(Resource.encounter.reference)),
+        ClinicalStatusCode = tostring(Resource.clinicalStatus.coding[0].code),
+        VerificationStatusCode = tostring(Resource.verificationStatus.coding[0].code),
+        CategoryCode = tostring(Resource.category[0].coding[0].code),
+        CodeSystem = tostring(Resource.code.coding[0].system),
+        Code = tostring(Resource.code.coding[0].code),
+        Display = tostring(Resource.code.coding[0].display),
+        EffectiveDateTime = todatetime(Resource.effectiveDateTime),
+        IssuedDateTime = todatetime(Resource.issued),
+        SourceHl7Version = "",
+        SourceMessageType,
+        SourceMessageControlId = "",
+        SourceEventId,
+        BronzeEventId = "",
+        SilverEventId = "",
+        MappingVersion = "epna-fhir-r4-demo-v1",
+        UscdiVersion = "",
+        UscdiPlusDomain = "",
+        TerminologyVersion = "synthetic-demo-v1",
+        SecurityLabels = Resource.meta.security,
+        ResourceJson = Resource,
+        EventTime,
+        IngestedAt = now()
+}
+
+.create-or-alter function with (folder = "FHIR/Ingestion") ProjectEpnaMonitoringSignals() {
+    ValidatedGoldFhirEvents()
+    | where isempty(RejectionReason) and EventKind == "monitoring"
+    | project
+        AlertId = tostring(Signal.AlertId),
+        EncounterId = tostring(Signal.EncounterId),
+        PatientReference = tostring(Signal.PatientReference),
+        FacilityId = tostring(Signal.FacilityId),
+        EncounterStatus = tostring(Signal.EncounterStatus),
+        EncounterClassCode = tostring(Signal.EncounterClassCode),
+        MonitoringStatus = tostring(Signal.MonitoringStatus),
+        AlertEligible = tobool(Signal.AlertEligible),
+        AlertScore = todouble(Signal.AlertScore),
+        AlertReasonCode = tostring(Signal.AlertReasonCode),
+        AlertReasonDisplay = tostring(Signal.AlertReasonDisplay),
+        SupportingResourceReferences = Signal.SupportingResourceReferences,
+        QualificationPolicyVersion = tostring(Signal.QualificationPolicyVersion),
+        EvaluatedAt = todatetime(Signal.EvaluatedAt),
+        EventTime,
+        SourceEventId,
+        CorrelationId = tostring(Signal.CorrelationId)
+}
+
+.create-or-alter function with (folder = "FHIR/Ingestion") ProjectRejectedGoldFhirEvents() {
+    ValidatedGoldFhirEvents()
+    | where isnotempty(RejectionReason)
+    | project SourceEventId, EventTime, EventKind, RejectionReason
+}
+
+.alter table GoldFhirResource policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirEvent","Query":"ProjectGoldFhirResources()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table EpnaMonitoringSignal policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirEvent","Query":"ProjectEpnaMonitoringSignals()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table GoldFhirRejectedEvent policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirEvent","Query":"ProjectRejectedGoldFhirEvents()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.create-or-alter function with (folder = "FHIR/Projections") ProjectGoldPatient() {
+    GoldFhirResource
+    | where ResourceType == "Patient"
+    | project PatientId = FhirId, EnterprisePatientId = tostring(ResourceJson.identifier[0].value),
+        IdentifierSystem = tostring(ResourceJson.identifier[0].system), IdentifierValue = tostring(ResourceJson.identifier[0].value),
+        Active = tobool(ResourceJson.active), BirthDate = todatetime(ResourceJson.birthDate),
+        AdministrativeSexCode = tostring(ResourceJson.gender), RaceCodes = dynamic([]), EthnicityCodes = dynamic([]),
+        PreferredLanguageCode = tostring(ResourceJson.communication[0].language.coding[0].code),
+        FhirProfileCanonical = ProfileCanonical, ResourceKey, EventTime
+}
+
+.create-or-alter function with (folder = "FHIR/Projections") ProjectGoldEncounter() {
+    GoldFhirResource
+    | where ResourceType == "Encounter"
+    | project EncounterId = FhirId, PatientId = extract(@"^Patient/(.+)$", 1, PatientReference),
+        StatusCode = tostring(ResourceJson.status), ClassSystem = tostring(ResourceJson.class.system),
+        ClassCode = tostring(ResourceJson.class.code), TypeSystem = tostring(ResourceJson.type[0].coding[0].system),
+        TypeCode = tostring(ResourceJson.type[0].coding[0].code), FacilityId = tostring(ResourceJson.location[0].location.identifier.value),
+        ServiceProviderReference = tostring(ResourceJson.serviceProvider.reference),
+        PeriodStart = todatetime(ResourceJson.period.start), PeriodEnd = todatetime(ResourceJson.period.end),
+        AdmitSourceCode = tostring(ResourceJson.hospitalization.admitSource.coding[0].code),
+        DischargeDispositionCode = tostring(ResourceJson.hospitalization.dischargeDisposition.coding[0].code),
+        ReasonCodes = ResourceJson.reasonCode, FhirProfileCanonical = ProfileCanonical, ResourceKey, EventTime
+}
+
+.create-or-alter function with (folder = "FHIR/Projections") ProjectGoldCondition() {
+    GoldFhirResource
+    | where ResourceType == "Condition"
+    | project ConditionId = FhirId, PatientId = extract(@"^Patient/(.+)$", 1, PatientReference),
+        EncounterId = extract(@"^Encounter/(.+)$", 1, EncounterReference),
+        ClinicalStatusCode, VerificationStatusCode, CategoryCode, CodeSystem, Code, Display,
+        OnsetDateTime = todatetime(ResourceJson.onsetDateTime), RecordedDate = todatetime(ResourceJson.recordedDate),
+        FhirProfileCanonical = ProfileCanonical, ResourceKey, EventTime
+}
+
+.create-or-alter function with (folder = "FHIR/Projections") ProjectGoldObservation() {
+    GoldFhirResource
+    | where ResourceType == "Observation"
+    | project ObservationId = FhirId, PatientId = extract(@"^Patient/(.+)$", 1, PatientReference),
+        EncounterId = extract(@"^Encounter/(.+)$", 1, EncounterReference), StatusCode = tostring(ResourceJson.status),
+        CategoryCode, CodeSystem, Code, Display, ValueQuantity = todouble(ResourceJson.valueQuantity.value),
+        ValueUnit = tostring(ResourceJson.valueQuantity.unit), ValueCodeSystem = tostring(ResourceJson.valueCodeableConcept.coding[0].system),
+        ValueCode = tostring(ResourceJson.valueCodeableConcept.coding[0].code), ValueString = tostring(ResourceJson.valueString),
+        InterpretationCodes = ResourceJson.interpretation, ReferenceRangeLow = todouble(ResourceJson.referenceRange[0].low.value),
+        ReferenceRangeHigh = todouble(ResourceJson.referenceRange[0].high.value), EffectiveDateTime,
+        FhirProfileCanonical = ProfileCanonical, ResourceKey, EventTime
+}
+
+.create-or-alter function with (folder = "FHIR/Projections") ProjectGoldServiceRequest() {
+    GoldFhirResource
+    | where ResourceType == "ServiceRequest"
+    | project ServiceRequestId = FhirId, PatientId = extract(@"^Patient/(.+)$", 1, PatientReference),
+        EncounterId = extract(@"^Encounter/(.+)$", 1, EncounterReference), StatusCode = tostring(ResourceJson.status),
+        IntentCode = tostring(ResourceJson.intent), CategoryCode, CodeSystem, Code, Display,
+        AuthoredOn = todatetime(ResourceJson.authoredOn), RequesterReference = tostring(ResourceJson.requester.reference),
+        ReasonReferences = ResourceJson.reasonReference, FhirProfileCanonical = ProfileCanonical, ResourceKey, EventTime
+}
+
+.create-or-alter function with (folder = "FHIR/Projections") ProjectGoldDiagnosticReport() {
+    GoldFhirResource
+    | where ResourceType == "DiagnosticReport"
+    | project DiagnosticReportId = FhirId, PatientId = extract(@"^Patient/(.+)$", 1, PatientReference),
+        EncounterId = extract(@"^Encounter/(.+)$", 1, EncounterReference), StatusCode = tostring(ResourceJson.status),
+        CategoryCode, CodeSystem, Code, Display, EffectiveDateTime, IssuedDateTime,
+        ResultReferences = ResourceJson.result, Conclusion = tostring(ResourceJson.conclusion),
+        ConclusionCodes = ResourceJson.conclusionCode, FhirProfileCanonical = ProfileCanonical, ResourceKey, EventTime
+}
+
+.create-or-alter function with (folder = "FHIR/Projections") ProjectGoldProvenance() {
+    GoldFhirResource
+    | where ResourceType == "Provenance"
+    | mv-apply Target = ResourceJson.target on (summarize TargetKeys = make_list(tostring(Target.reference)))
+    | project ProvenanceId = FhirId, TargetResourceKeys = TargetKeys, Recorded = todatetime(ResourceJson.recorded),
+        AgentTypeCode = tostring(ResourceJson.agent[0].type.coding[0].code), AgentReference = tostring(ResourceJson.agent[0].who.reference),
+        ActivityCode = tostring(ResourceJson.activity.coding[0].code), SourceSystem = "epna-synthetic",
+        SourceEventId, SourceMessageControlId, PayloadHash = hash_sha256(tostring(ResourceJson)), MappingVersion, EventTime
+}
+
+.alter table GoldPatient policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirResource","Query":"ProjectGoldPatient()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table GoldEncounter policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirResource","Query":"ProjectGoldEncounter()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table GoldCondition policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirResource","Query":"ProjectGoldCondition()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table GoldObservation policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirResource","Query":"ProjectGoldObservation()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table GoldServiceRequest policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirResource","Query":"ProjectGoldServiceRequest()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table GoldDiagnosticReport policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirResource","Query":"ProjectGoldDiagnosticReport()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter table GoldProvenance policy update
+@'[{"IsEnabled":true,"Source":"GoldFhirResource","Query":"ProjectGoldProvenance()","IsTransactional":true,"PropagateIngestionProperties":true}]'
+
+.alter-merge table GoldFhirEvent policy retention softdelete = 1d recoverability = enabled
+
+.alter-merge table GoldFhirRejectedEvent policy retention softdelete = 7d recoverability = enabled

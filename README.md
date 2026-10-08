@@ -2,6 +2,12 @@
 
 Microsoft Fabric Real-Time Intelligence, Eventhouse, OneLake, semantic interoperability, and governed API access.
 
+**Implemented FHIR access POC:** [HAPI FHIR over Gold Eventhouse](./docs/fhir-gold-poc.md)
+documents the repurposed [Terraform deployment](./terraform), the containerized
+read-only HAPI R4 adapter, Gold Eventstream ingestion, and five synthetic ePNA
+lifecycle [Bundles and event files](./samples/epna). Gold remains authoritative;
+no HAPI JPA, SQL, Cosmos or second clinical repository is introduced.
+
 | Document information | Value |
 |---|---|
 | Architecture status | Approved architecture |
@@ -216,6 +222,16 @@ The deployment creates or reconciles:
 3. The KQL schema in [`fabric/kql/DatabaseSchema.kql`](./fabric/kql/DatabaseSchema.kql).
 4. An Activator/Reflex item that polls `EpnaAlertCandidates()` every 60 seconds.
 5. An email rule that fires when an active emergency encounter transitions to a clinician-approved ePNA-qualified signal.
+
+The deployment also creates a custom-endpoint Gold FHIR Eventstream using the
+[direct-ingestion definition](./fabric/eventstream/GoldFhirEventstream.template.json).
+It writes one resource or monitoring envelope per event into `GoldFhirEvent`;
+transactional update policies populate the canonical and typed Gold tables.
+Invalid envelopes are visible in `GoldFhirRejectedEvent`. See the
+[FHIR/ePNA runbook](./docs/fhir-gold-poc.md) for publishing and acceptance checks.
+The alert query now selects the latest encounter signal **before** applying
+eligibility filters, so an older qualified signal cannot supersede discharge,
+transfer or non-qualification.
 
 ### Standards boundary
 

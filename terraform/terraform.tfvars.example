@@ -1,0 +1,25 @@
+subscription_id    = "REPLACE_WITH_SUBSCRIPTION_UUID"
+tenant_id          = "REPLACE_WITH_TENANT_UUID"
+operator_object_id = "REPLACE_WITH_OPERATOR_OBJECT_UUID"
+publisher_email    = "platform-team@example.org"
+publisher_name     = "Your organization"
+
+prefix      = "hie"
+environment = "dev"
+location    = "eastus2"
+
+vnet_cidr    = "10.230.0.0/16"
+pod_cidr     = "10.244.0.0/16"
+service_cidr = "10.240.0.0/16"
+aks_vm_size  = "Standard_D2ds_v5"
+aks_node_count = 2
+apim_sku       = "Developer_1"
+gold_query_uri     = "https://REPLACE_WITH_GOLD_QUERY_HOST.kusto.fabric.microsoft.com"
+gold_database_name = "hie_gold"
+# Existing, approved client service-principal object IDs, not client IDs.
+fhir_reader_principal_ids = []
+tags = {
+  owner = "Your platform team"
+}
+
+# Never put a client secret, token, kubeconfig or Terraform state in this file.

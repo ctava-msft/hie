@@ -1,0 +1,152 @@
+{
+  "resourceType": "Bundle",
+  "id": "epna-discharge",
+  "type": "collection",
+  "meta": {
+    "tag": [
+      {
+        "system": "https://example.org/fhir/CodeSystem/data-origin",
+        "code": "synthetic"
+      }
+    ]
+  },
+  "timestamp": "2026-10-01T12:03:00Z",
+  "entry": [
+    {
+      "fullUrl": "https://example.org/fhir/Encounter/epna-e1",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "epna-e1",
+        "meta": {
+          "versionId": "2",
+          "lastUpdated": "2026-10-01T12:03:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "finished",
+        "class": {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code": "EMER"
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "period": {
+          "start": "2026-10-01T12:00:00Z",
+          "end": "2026-10-01T12:03:00Z"
+        },
+        "location": [
+          {
+            "location": {
+              "identifier": {
+                "system": "https://example.org/fhir/identifier/facility",
+                "value": "SYNTHETIC-ED-01"
+              }
+            }
+          }
+        ],
+        "reasonCode": [
+          {
+            "coding": [
+              {
+                "system": "https://example.org/fhir/CodeSystem/epna-demo",
+                "code": "demo-ed-evaluation",
+                "display": "Synthetic emergency evaluation"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Observation/epna-monitoring-1",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "epna-monitoring-1",
+        "meta": {
+          "versionId": "3",
+          "lastUpdated": "2026-10-01T12:03:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/epna-demo",
+              "code": "monitoring-status",
+              "display": "Synthetic ePNA monitoring state"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/epna-p1"
+        },
+        "encounter": {
+          "reference": "Encounter/epna-e1"
+        },
+        "effectiveDateTime": "2026-10-01T12:03:00Z",
+        "valueCodeableConcept": {
+          "coding": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/epna-demo",
+              "code": "discharged"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "fullUrl": "https://example.org/fhir/Provenance/epna-provenance-discharge",
+      "resource": {
+        "resourceType": "Provenance",
+        "id": "epna-provenance-discharge",
+        "meta": {
+          "versionId": "1",
+          "lastUpdated": "2026-10-01T12:03:00Z",
+          "tag": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/data-origin",
+              "code": "synthetic"
+            }
+          ]
+        },
+        "target": [
+          {
+            "reference": "Encounter/epna-e1"
+          },
+          {
+            "reference": "Observation/epna-monitoring-1"
+          }
+        ],
+        "recorded": "2026-10-01T12:03:00Z",
+        "agent": [
+          {
+            "who": {
+              "identifier": {
+                "system": "https://example.org/fhir/identifier/test-agent",
+                "value": "epna-fixture-generator"
+              }
+            }
+          }
+        ],
+        "activity": {
+          "coding": [
+            {
+              "system": "https://example.org/fhir/CodeSystem/epna-demo",
+              "code": "synthetic-fixture"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

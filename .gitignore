@@ -1,2 +1,8 @@
 /infra/main.bicepparam
 /infra/capacity.bicepparam
+**/target/
+**/__pycache__/
+.venv/
+.generated/
+*.runtime.json
+*.kubeconfig

@@ -4,6 +4,7 @@ $FabricCapacityId = $env:FABRIC_CAPACITY_ID
 $WorkspaceDisplayName = $env:WORKSPACE_DISPLAY_NAME
 $EventhouseDisplayName = $env:EVENTHOUSE_DISPLAY_NAME
 $KqlDatabaseDisplayName = $env:KQL_DATABASE_DISPLAY_NAME
+$EventstreamDisplayName = $env:EVENTSTREAM_DISPLAY_NAME
 $ActivatorDisplayName = $env:ACTIVATOR_DISPLAY_NAME
 $AlertRecipient = $env:ALERT_RECIPIENT
 $EnableActivatorRule = $env:ENABLE_ACTIVATOR_RULE -eq 'true'
@@ -13,10 +14,12 @@ $requiredEnvironmentVariables = @(
     'WORKSPACE_DISPLAY_NAME',
     'EVENTHOUSE_DISPLAY_NAME',
     'KQL_DATABASE_DISPLAY_NAME',
+    'EVENTSTREAM_DISPLAY_NAME',
     'ACTIVATOR_DISPLAY_NAME',
     'ALERT_RECIPIENT',
     'KQL_DATABASE_SCHEMA_BASE64',
-    'REFLEX_ENTITIES_TEMPLATE_BASE64'
+    'REFLEX_ENTITIES_TEMPLATE_BASE64',
+    'EVENTSTREAM_DEFINITION_BASE64'
 )
 foreach ($variableName in $requiredEnvironmentVariables) {
     if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($variableName))) {
@@ -245,6 +248,52 @@ if ($null -eq $kqlDatabase) {
     throw "KQL database '$KqlDatabaseDisplayName' was not found after creation."
 }
 
+$eventstreamJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:EVENTSTREAM_DEFINITION_BASE64))
+$eventstreamJson = $eventstreamJson.Replace('__WORKSPACE_ID__', [string] $workspace.id)
+$eventstreamJson = $eventstreamJson.Replace('__EVENTHOUSE_ID__', [string] $eventhouse.id)
+$eventstreamJson = $eventstreamJson.Replace('__CONNECTION_NAME__', "hie-gold-fhir-$(([string] $kqlDatabase.id).Substring(0, 8))")
+[void] ($eventstreamJson | ConvertFrom-Json -Depth 100)
+$eventstreamDefinition = @{
+    parts = @(
+        @{
+            path = 'eventstream.json'
+            payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($eventstreamJson))
+            payloadType = 'InlineBase64'
+        },
+        @{
+            path = 'eventstreamProperties.json'
+            payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"retentionTimeInDays":1,"eventThroughputLevel":"Low"}'))
+            payloadType = 'InlineBase64'
+        }
+    )
+}
+$eventstream = Wait-ItemByName -WorkspaceId $workspace.id -DisplayName $EventstreamDisplayName -Type 'Eventstream'
+if ($null -eq $eventstream) {
+    $platform = @{
+        '$schema' = 'https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json'
+        metadata = @{ type = 'Eventstream'; displayName = $EventstreamDisplayName }
+        config = @{ version = '2.0'; logicalId = [guid]::NewGuid().ToString() }
+    } | ConvertTo-Json -Depth 10 -Compress
+    $eventstreamDefinition.parts += @{
+        path = '.platform'
+        payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($platform))
+        payloadType = 'InlineBase64'
+    }
+    $response = Invoke-FabricRequest -Method POST -Uri "$fabricApi/workspaces/$($workspace.id)/eventstreams" -Body @{
+        displayName = $EventstreamDisplayName
+        description = 'Synthetic R4 resource and monitoring events ingested directly into the authoritative Gold Eventhouse.'
+        definition = $eventstreamDefinition
+    }
+    Complete-FabricResponse -Response $response
+    $eventstream = Get-ItemByName -WorkspaceId $workspace.id -DisplayName $EventstreamDisplayName -Type 'Eventstream'
+}
+else {
+    Set-ItemDefinition -WorkspaceId $workspace.id -ItemId $eventstream.id -Definition $eventstreamDefinition
+}
+if ($null -eq $eventstream) {
+    throw "Eventstream '$EventstreamDisplayName' was not found after creation."
+}
+
 $reflexJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:REFLEX_ENTITIES_TEMPLATE_BASE64))
 $reflexJson = $reflexJson.Replace('__EVENTHOUSE_ITEM_ID__', [string] $eventhouse.id)
 $reflexJson = $reflexJson.Replace('__ALERT_RECIPIENT__', $AlertRecipient.Replace('\', '\\').Replace('"', '\"'))
@@ -283,5 +332,6 @@ $DeploymentScriptOutputs = @{
     workspaceId = [string] $workspace.id
     eventhouseId = [string] $eventhouse.id
     kqlDatabaseId = [string] $kqlDatabase.id
+    eventstreamId = [string] $eventstream.id
     activatorId = [string] $activator.id
 }

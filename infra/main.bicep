@@ -15,6 +15,9 @@ param eventhouseDisplayName string = 'hie-gold-eventhouse'
 @description('Display name for the Gold KQL database.')
 param kqlDatabaseDisplayName string = 'hie_gold'
 
+@description('Display name for the synthetic Gold FHIR ingress Eventstream.')
+param eventstreamDisplayName string = 'hie-gold-fhir-events'
+
 @description('Display name for the ePNA Activator item.')
 param activatorDisplayName string = 'epna-qualified-encounter-alert'
 
@@ -62,6 +65,10 @@ resource fabricBootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
         value: kqlDatabaseDisplayName
       }
       {
+        name: 'EVENTSTREAM_DISPLAY_NAME'
+        value: eventstreamDisplayName
+      }
+      {
         name: 'ACTIVATOR_DISPLAY_NAME'
         value: activatorDisplayName
       }
@@ -81,6 +88,10 @@ resource fabricBootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
         name: 'REFLEX_ENTITIES_TEMPLATE_BASE64'
         value: base64(loadTextContent('../fabric/activator/ReflexEntities.template.json'))
       }
+      {
+        name: 'EVENTSTREAM_DEFINITION_BASE64'
+        value: base64(loadTextContent('../fabric/eventstream/GoldFhirEventstream.template.json'))
+      }
     ]
   }
 }
@@ -88,5 +99,6 @@ resource fabricBootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
 output workspaceId string = fabricBootstrap.properties.outputs.workspaceId
 output eventhouseId string = fabricBootstrap.properties.outputs.eventhouseId
 output kqlDatabaseId string = fabricBootstrap.properties.outputs.kqlDatabaseId
+output eventstreamId string = fabricBootstrap.properties.outputs.eventstreamId
 output activatorId string = fabricBootstrap.properties.outputs.activatorId
 output activatorRuleEnabled bool = enableActivatorRule
