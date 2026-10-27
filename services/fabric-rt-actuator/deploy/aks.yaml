@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fabric-activator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fabric-activator
+  namespace: fabric-activator
+  annotations:
+    azure.workload.identity/client-id: REPLACE_WITH_MANAGED_IDENTITY_CLIENT_ID
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fabric-activator-config
+  namespace: fabric-activator
+data:
+  SERVICE_BUS_NAMESPACE: REPLACE_WITH_NAMESPACE.servicebus.windows.net
+  SERVICE_BUS_QUEUE: activator-deliveries
+  DOWNSTREAM_URL: https://example.invalid/activator
+  FABRIC_WORKSPACE_ID: 00000000-0000-0000-0000-000000000000
+  FABRIC_ACTIVATOR_ID: 00000000-0000-0000-0000-000000000000
+  AUDIT_DIRECTORY: /app/data/deployments
+  WORKER_ENABLED: "true"
+  WORKER_CONCURRENCY: "4"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fabric-activator-data
+  namespace: fabric-activator
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fabric-activator
+  namespace: fabric-activator
+spec:
+  # Rule read/modify/write is serialized; do not scale this combined deployment.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: fabric-activator
+  template:
+    metadata:
+      labels:
+        app: fabric-activator
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: fabric-activator
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: REPLACE_WITH_ACR.azurecr.io/fabric-rt-actuator:0.1.0
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: fabric-activator-config
+            - secretRef:
+                name: fabric-activator-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: fabric-activator-data
+        - name: temporary
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fabric-activator
+  namespace: fabric-activator
+spec:
+  type: ClusterIP
+  selector:
+    app: fabric-activator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

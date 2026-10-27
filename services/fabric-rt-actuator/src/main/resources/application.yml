@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: fabric-rt-actuator
+  config:
+    import: optional:file:.env[.properties]
+  lifecycle:
+    timeout-per-shutdown-phase: 40s
+server:
+  port: 8080
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+app:
+  webhook-api-key: ${WEBHOOK_API_KEY:}
+  admin-api-key: ${ADMIN_API_KEY:}
+  service-bus-namespace: ${SERVICE_BUS_NAMESPACE:}
+  service-bus-connection-string: ${SERVICE_BUS_CONNECTION_STRING:}
+  service-bus-queue: ${SERVICE_BUS_QUEUE:activator-deliveries}
+  worker-enabled: ${WORKER_ENABLED:true}
+  worker-concurrency: ${WORKER_CONCURRENCY:4}
+  downstream-url: ${DOWNSTREAM_URL:https://example.invalid/activator}
+  downstream-bearer-token: ${DOWNSTREAM_BEARER_TOKEN:}
+  fabric-workspace-id: ${FABRIC_WORKSPACE_ID:}
+  fabric-activator-id: ${FABRIC_ACTIVATOR_ID:}
+  audit-directory: ${AUDIT_DIRECTORY:./data/deployments}

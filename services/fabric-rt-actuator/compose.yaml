@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
+    env_file: .env
+    environment:
+      AUDIT_DIRECTORY: /app/data/deployments
+    volumes:
+      - deployment-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    stop_grace_period: 45s
+volumes:
+  deployment-data:

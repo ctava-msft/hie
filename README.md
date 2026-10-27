@@ -8,6 +8,13 @@ read-only HAPI R4 adapter, Gold Eventstream ingestion, and five synthetic ePNA
 lifecycle [Bundles and event files](./samples/epna). Gold remains authoritative;
 no HAPI JPA, SQL, Cosmos or second clinical repository is introduced.
 
+**Imported Activator delivery service:** [Java 21 / Spring Boot service](./services/fabric-rt-actuator)
+provides webhook intake, durable Service Bus delivery to a downstream API, and
+editing of an existing Activator temperature rule. See
+[Epic ADT integration and setup](./docs/adt-activator.md) for import provenance,
+deployment boundaries, and the admission/discharge-driven patient rule management
+that is **not yet implemented**.
+
 | Document information | Value |
 |---|---|
 | Architecture status | Approved architecture |

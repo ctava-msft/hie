@@ -1,0 +1,22 @@
+# Optional: configure an ingress controller, DNS, and the TLS secret first.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fabric-activator-webhook
+  namespace: fabric-activator
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [activator.example.com]
+      secretName: activator-webhook-tls
+  rules:
+    - host: activator.example.com
+      http:
+        paths:
+          - path: /api/webhooks/activator
+            pathType: Exact
+            backend:
+              service:
+                name: fabric-activator
+                port:
+                  number: 8080
