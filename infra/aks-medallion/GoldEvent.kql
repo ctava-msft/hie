@@ -1,0 +1,18 @@
+.create table GoldEvent (
+    schemaVersion: string,
+    eventId: string,
+    source: string,
+    eventType: string,
+    eventTime: datetime,
+    projectedTime: datetime,
+    silverBlob: string,
+    silverHash: string,
+    payload: dynamic
+)
+
+.alter table GoldEvent policy streamingingestion enable
+
+.create function ifnotexists GoldEventCurrent() {
+    GoldEvent
+    | summarize arg_max(eventTime, *) by source, eventType, eventId
+}

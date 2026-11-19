@@ -2,7 +2,7 @@
 
 Microsoft Fabric Real-Time Intelligence, Eventhouse, OneLake, semantic interoperability, and governed API access.
 
-**Implemented FHIR access POC:** [HAPI FHIR over Gold Eventhouse](./docs/fhir-gold-poc.md)
+**Implemented FHIR access:** [HAPI FHIR over Gold Eventhouse](./docs/fhir-gold-poc.md)
 documents the repurposed [Terraform deployment](./terraform), the containerized
 read-only HAPI R4 adapter, Gold Eventstream ingestion, and five synthetic ePNA
 lifecycle [Bundles and event files](./samples/epna). Gold remains authoritative;
@@ -15,23 +15,56 @@ editing of an existing Activator temperature rule. See
 deployment boundaries, and the admission/discharge-driven patient rule management
 that is **not yet implemented**.
 
+**AKS medallion implementation:** [Java AKS real-time pipeline](./services/aks-medallion)
+provides role-specific Bronze, Silver, and Gold workloads, durable Service Bus
+stage handoffs, ADLS Gen2 persistence, ADX ingestion, Bicep infrastructure, and
+KEDA-scaled Kubernetes deployments. The JSON normalization is intentionally a
+transport and validation reference implementation; production HL7/FHIR and
+terminology mapping remains subject to clinical governance.
+
 | Document information | Value |
 |---|---|
 | Architecture status | Approved architecture |
 | Document type | Solution architecture document |
 | Prepared for | Intermountain Health HIE |
 | Prepared by | Chris Tava |
-| Date | 4 October 2026 |
+| Date | 19 November 2026 |
 
 ## Architecture Statement
 
-This document establishes the illustrated architecture for the HIE proof-of-concept program. The implementation will ingest Epic FHIR/HL7 events through Azure Event Hubs and Fabric Eventstream, preserve raw HL7 Base64 in Bronze Eventhouse, perform Base64 decoding and HL7-to-JSON normalization inside Fabric, promote structured data through Silver and Gold Eventhouse layers, materialize analytical data into Lakehouse/OneLake, and expose governed real-time, analytical, semantic, alerting, FHIR, and API consumption paths.
+This document establishes the shared architecture for the HIE program and
+presents two real-time implementation options. **Option 1: Fabric
+RT** is the approved Fabric-based baseline for Eventstream, Eventhouse, and
+OneLake. **Option 2: AKS RT Medallion** is an Azure-native implementation using
+AKS, Service Bus, ADLS Gen2, and Azure Data Explorer. Both options retain the
+Epic/Event Hubs ingress contract and governed FHIR, API, analytical, and
+operational consumption boundaries.
 
 ## 1. Executive Summary
 
-The architecture uses Microsoft Fabric Real-Time Intelligence as the primary real-time ingestion, transformation, persistence, and operational analytics platform for HIE events. Azure Event Hubs remains the external event ingress. Fabric Eventstream consumes the HL7 Base64 event stream and writes the original representation to Bronze Eventhouse. Fabric processing decodes Base64, parses HL7, and maps the data to HL7 JSON and a USCDI+ aligned Silver structure. Eventhouse update policies and governed transformation logic promote curated row-and-column structures into Gold Eventhouse.
+Option 1 uses Microsoft Fabric Real-Time Intelligence as the primary real-time
+ingestion, transformation, persistence, and operational analytics platform for
+HIE events. Azure Event Hubs remains the external event ingress. Fabric
+Eventstream consumes the HL7 Base64 event stream and writes the original
+representation to Bronze Eventhouse. Fabric processing decodes Base64, parses
+HL7, and maps the data to HL7 JSON and a USCDI+ aligned Silver structure.
+Eventhouse update policies and governed transformation logic promote curated
+row-and-column structures into Gold Eventhouse.
 
 The architecture separates operational real-time consumption from durable analytical and integration consumption. Gold Eventhouse directly supports KQL queries, Real-Time Dashboards, and Activator. A Fabric notebook materializes curated data into Lakehouse and OneLake for Power BI, semantic models, ontologies, data agents, and governed APIs. An AKS-hosted HAPI FHIR service provides a standards-based FHIR access path. Azure API Management provides the managed external access boundary for approved application, Copilot, and AI clients.
+
+Option 2 uses AKS-hosted Java workloads for Bronze ingestion, Silver
+normalization, and Gold projection. Service Bus provides durable stage
+handoffs and dead-letter handling, ADLS Gen2 provides the Bronze and Silver
+stores, and Azure Data Explorer provides the KQL-compatible Eventhouse/Gold
+serving layer. The AKS design is an initial reference implementation, not an
+approved replacement for the Fabric baseline. See the [AKS medallion
+architecture](./docs/azure-aks-medallion-architecture.md) and [Java
+implementation](./services/aks-medallion).
+
+Unless a section explicitly describes Option 2, the remaining component,
+security, reliability, and implementation descriptions document the approved
+Fabric RT baseline.
 
 ## 2. Architecture Approach
 
@@ -47,17 +80,45 @@ The architecture separates operational real-time consumption from durable analyt
 | External access | API Management fronts the AKS-hosted HAPI FHIR service and approved SQL endpoint, OneLake API, DAX Query API, and Foundry-backed access patterns. |
 | Alerting | Activator detects approved real-time conditions and invokes alerting workflows. It is not assumed to be the complete clinical subscription or durable delivery backbone. |
 
+### 2.1 AKS-Based RT vs. Microsoft Fabric RT Intelligence
+
+| Dimension | AKS-based RT | Microsoft Fabric RT Intelligence |
+|---|---|---|
+| **Best fit** | Custom, high-control streaming, API, and integration workloads | Rapid delivery of operational analytics with minimal platform management |
+| **Architecture** | Event Hubs + AKS/KEDA + Service Bus + ADLS Gen2 + Azure Data Explorer | Event Hubs + Eventstream + Eventhouse + Activator + OneLake |
+| **Primary strength** | Maximum control over application behavior, integrations, and deployment | Integrated, low-code real-time experience across KQL, dashboards, Power BI, and OneLake |
+| **Pros** | Full control over parsers, retries, ordering, APIs, and replay; supports any runtime; KEDA scaling; clear stage boundaries; reusable AKS skills | Fast implementation; managed Eventstream, Eventhouse, KQL dashboards, and Activator; strong Power BI/OneLake integration; less infrastructure management |
+| **Cons** | Highest operational burden; cluster, container, broker, networking, identity, SRE, idempotency, recovery, and upgrade ownership remain with the engineering team | Less control over internal processing and recovery; capacity economics and throttling; specialized Fabric permissions and automation; Eventhouse is not a transactional store; Activator is not a complete durable delivery engine |
+| **Operational complexity** | **High** | **Low–Medium** |
+| **Implementation speed** | **Slower** | **Faster for supported patterns** |
+| **Customization** | **Highest** | **Medium–Low** |
+| **Low-latency operational queries** | Excellent with Azure Data Explorer or another purpose-built serving store | Excellent with Eventhouse/KQL |
+| **Bronze/Silver/Gold support** | Explicitly implemented in application code and Azure services | Native conceptual flow with Eventhouse, notebooks, and OneLake |
+| **Replay and correction** | Fully controllable, but checkpoints, deterministic identities, replay, and reconciliation must be engineered | Managed platform patterns, with recovery details constrained by Fabric behavior and operating model |
+| **Durable action delivery** | Strong with Service Bus, outbox, retry, and dead-letter patterns | Requires an external durable delivery path behind Activator for guaranteed integration delivery |
+| **Governance** | Azure RBAC, Entra, private networking, Key Vault, ADLS, and custom lineage | Centralized through Fabric workspaces, OneLake, tenant administration, and item permissions |
+| **Engineering skills** | Kubernetes, Java/.NET, messaging, ADLS, ADX, identity, networking, and SRE | KQL, Eventstream, Eventhouse, Power BI, OneLake, workspace administration, and Activator |
+| **Portability / exit strategy** | High at the application layer; Azure managed-service dependencies remain | Lower; workload definitions and real-time data-plane behavior are Fabric-specific |
+| **Cost profile** | AKS, Event Hubs, Service Bus, ADLS, ADX, monitoring, and APIM costs with fixed and variable components | Fabric capacity plus supporting Azure ingress/services; potentially efficient when capacity is well utilized |
+| **Healthcare / PHI controls** | Strong control over networking, identity, logging, and processing boundaries; more controls must be implemented and maintained | Strong platform controls; regional, private-access, tenant, capacity, and workspace requirements must be validated |
+| **Key failure modes** | Pod eviction, checkpoint loss, duplicate processing, broker throttling, dead-letter growth, partial ADLS commits, and ADX ingestion failure | Capacity throttling, update-policy failure, tenant permissions, workspace dependencies, checkpoint/replay constraints, and action-delivery limits |
+
 ## 3. Logical Architecture
 
-![Intermountain Health HIE solution architecture](HIE-SA.png)
+The two options share the source, consumer, security, and governance
+boundaries while using different real-time implementation platforms.
 
-*Figure 1. HIE real-time intelligence and analytical architecture.*
+### 3.1 Option 1: Microsoft Fabric RT
+
+![Intermountain Health HIE Fabric RT architecture](hie-Changes-8.drawio.png)
+
+*Figure 1. Approved Fabric RT real-time intelligence and analytical architecture.*
 
 | Source | Ingest | Bronze | Transform | Silver | Gold | Consumers |
 |---|---|---|---|---|---|---|
 | Epic FHIR/HL7 events | Azure Event Hubs and Fabric Eventstream | Eventhouse HL7 Base64 | Decode Base64, parse HL7, and map to JSON | Eventhouse HL7 JSON/USCDI+ | Eventhouse HL7 row/column | Dashboard, KQL, Activator, Lakehouse, Power BI, HAPI FHIR, APIs, and AI |
 
-### 3.1 End-to-End Data Flow
+#### Fabric RT End-to-End Data Flow
 
 1. Epic publishes FHIR/HL7 events to Azure Event Hubs using an HL7 Base64 payload and the agreed event envelope.
 2. Fabric Eventstream consumes events once and delivers the unmodified payload and metadata to Bronze Eventhouse.
@@ -69,6 +130,33 @@ The architecture separates operational real-time consumption from durable analyt
 8. Power BI, semantic models, ontologies, data agents, and approved AI experiences consume governed Lakehouse/OneLake data.
 9. The AKS-hosted HAPI FHIR service provides an approved FHIR R4 access path integrated with the curated Gold data boundary.
 10. API Management exposes HAPI FHIR and other approved API products backed by appropriate data-access adapters rather than exposing the data stores directly.
+
+### 3.2 Option 2: AKS RT Medallion
+
+![Intermountain Health HIE AKS RT medallion architecture](hie-aks-medallion.drawio.png)
+
+*Figure 2. AKS RT medallion architecture.*
+
+| Source | Ingest | Bronze | Transform | Silver | Gold | Consumers |
+|---|---|---|---|---|---|---|
+| Epic FHIR/HL7 and partner events | Azure Event Hubs | ADLS Gen2 raw payload and manifest | AKS normalization worker with validation, parsing, and versioned mapping | ADLS Gen2 normalized JSON/Delta with lineage | AKS projector to Azure Data Explorer | KQL dashboards, Power BI, AKS/HAPI APIs, APIM, applications, and durable actions |
+
+#### AKS RT End-to-End Data Flow
+
+1. Epic and partner systems publish HL7, FHIR, or JSON envelopes to Azure Event Hubs.
+2. The AKS Bronze worker checkpoints Event Hubs and commits the unmodified payload and metadata to ADLS Gen2 Bronze.
+3. The worker publishes a `bronze-ready` Service Bus message only after the Bronze commit is confirmed.
+4. The AKS Silver worker reads the committed Bronze object, validates and normalizes the payload, and records the parser and mapping version.
+5. Invalid or unsupported messages move to the Service Bus dead-letter/quarantine path without discarding the original Bronze object.
+6. The Silver worker commits normalized JSON or Delta records to ADLS Gen2 Silver.
+7. A `silver-ready` message coordinates the AKS Gold projector.
+8. The Gold projector performs idempotent ingestion into Azure Data Explorer for operational KQL queries and current-state projections.
+9. Rule/action processing uses a durable Service Bus action path rather than assuming the detection engine is the delivery system.
+10. Approved consumers access dashboards, ADX/KQL, Power BI, HAPI FHIR, and application APIs through governed identities and API Management.
+
+The editable source is [hie-aks-medallion.drawio](./hie-aks-medallion.drawio).
+Deployment assets and implementation boundaries are documented in the [AKS
+medallion service guide](./services/aks-medallion/README.md).
 
 ## 4. Component Architecture
 
@@ -155,20 +243,20 @@ Direct APIM-to-database arrows in the architecture are logical relationships. AP
 | Recovery | Document replay boundaries, materialization restart, rule rollback, semantic-model rollback, API version rollback, and operator ownership. |
 | Regional resilience | Regional topology, failover authority, subscription/routing state, RTO/RPO, and duplicate behavior remain implementation choices requiring validation. |
 
-## 9. Eight Proofs of Concept
+## 9. Eight Implementation Validation Areas
 
-| POC | Name | Primary outcome |
+| Area | Name | Primary outcome |
 |---|---|---|
-| POC 1 | Event Hub to Eventstream to Bronze Eventhouse | Prove secure ingestion, raw preservation, metadata capture, throughput, lag, and replay traceability. |
-| POC 2 | HL7 Base64 to HL7 JSON and USCDI+ | Prove Base64 decoding, HL7 parsing, validation, error quarantine, Silver normalization, and Gold update policies. |
-| POC 3 | Real-Time Dashboard | Prove KQL-backed operational visualization, freshness, filtering, and representative event/quality measures. |
-| POC 4 | Activator alerts | Prove selected rules, action delivery, throttling behavior, auditability, and the boundary between operational alerts and clinical delivery. |
-| POC 5 | Eventhouse to Lakehouse/OneLake | Prove incremental notebook materialization, Delta schema, checkpointing, reconciliation, and analytical query readiness. |
-| POC 6 | Semantic interoperability and data agents | Prove ontologies, semantic models, approved terminology mapping, natural-language questions, identity, and result traceability. |
-| POC 7 | Governed API access through APIM | Compare SQL endpoint-backed, OneLake-backed, DAX Query, and Foundry API patterns through a constrained backend service and APIM. |
-| POC 8 | AKS-hosted HAPI FHIR | Prove a governed FHIR R4 service path for approved Gold clinical resources through HAPI FHIR, AKS, and APIM. |
+| 1 | Event Hub to Eventstream to Bronze Eventhouse | Prove secure ingestion, raw preservation, metadata capture, throughput, lag, and replay traceability. |
+| 2 | HL7 Base64 to HL7 JSON and USCDI+ | Prove Base64 decoding, HL7 parsing, validation, error quarantine, Silver normalization, and Gold update policies. |
+| 3 | Real-Time Dashboard | Prove KQL-backed operational visualization, freshness, filtering, and representative event/quality measures. |
+| 4 | Activator alerts | Prove selected rules, action delivery, throttling behavior, auditability, and the boundary between operational alerts and clinical delivery. |
+| 5 | Eventhouse to Lakehouse/OneLake | Prove incremental notebook materialization, Delta schema, checkpointing, reconciliation, and analytical query readiness. |
+| 6 | Semantic interoperability and data agents | Prove ontologies, semantic models, approved terminology mapping, natural-language questions, identity, and result traceability. |
+| 7 | Governed API access through APIM | Compare SQL endpoint-backed, OneLake-backed, DAX Query, and Foundry API patterns through a constrained backend service and APIM. |
+| 8 | AKS-hosted HAPI FHIR | Prove a governed FHIR R4 service path for approved Gold clinical resources through HAPI FHIR, AKS, and APIM. |
 
-## 10. Cross-POC Acceptance Criteria
+## 10. Cross-Implementation Acceptance Criteria
 
 - **Functional:** Supported events complete the full Bronze-to-Silver-to-Gold path and retain lineage.
 - **Performance:** Measured throughput, event size, burst, transformation latency, dashboard freshness, materialization latency, and API response times are recorded against agreed targets.
@@ -176,7 +264,7 @@ Direct APIM-to-database arrows in the architecture are logical relationships. AP
 - **Security:** Unauthorized identities, fields, queries, API routes, and agent sources are rejected and audited.
 - **Reliability:** Replay, duplicate delivery, malformed payload, dependency outage, throttling, checkpoint restart, and partial failure scenarios are exercised.
 - **Operations:** Dashboards and runbooks identify owners, alerts, diagnostic queries, recovery steps, and escalation paths.
-- **Outcome:** Each POC ends with a documented pass, conditional pass, or fail and records any architecture change required.
+- **Outcome:** Each validation area ends with a documented pass, conditional pass, or fail and records any architecture change required.
 
 ## 11. Implementation Workstreams
 
@@ -192,16 +280,16 @@ Direct APIM-to-database arrows in the architecture are logical relationships. AP
 
 ## 12. Assumptions, Constraints, and Open Implementation Topics
 
-- The architecture diagram and the approaches in this document are authoritative for the eight-POC program unless changed through architecture governance.
+- The architecture diagram and the approaches in this document are authoritative for the eight implementation validation areas unless changed through architecture governance.
 - Gold Eventhouse and analytical Lakehouse are intentionally distinct serving models. The term "Gold" must always be qualified as operational Eventhouse Gold or analytical Lakehouse Gold.
-- The specific HL7 parser implementation, supported HL7 versions/message families, and USCDI+ mapping profile will be selected and versioned during POC 2.
+- The specific HL7 parser implementation, supported HL7 versions/message families, and USCDI+ mapping profile will be selected and versioned during validation area 2.
 - Capacity sizing requires measured event rate, peak/burst factor, payload size, retention, query concurrency, notebook workload, semantic-model size, and API demand.
 - The diagram does not establish a production clinical Pub/Sub contract. Dynamic subscriptions, durable endpoint delivery, retries, DLQ, and region recovery require a separate architecture review if included in production scope.
 - RTO, RPO, data residency, retention, private networking, customer-managed key requirements, and regulated-data controls must be confirmed with the responsible Intermountain governance teams.
 
 ## 13. Architecture Governance
 
-Any proposed change to ingress, Bronze/Silver/Gold boundaries, transformation location, Eventhouse-to-Lakehouse materialization, semantic access, API exposure, or identity model must be recorded in an architecture record. The change must identify the affected POCs, security and privacy impact, migration impact, rollback approach, and diagram/document updates before implementation.
+Any proposed change to ingress, Bronze/Silver/Gold boundaries, transformation location, Eventhouse-to-Lakehouse materialization, semantic access, API exposure, or identity model must be recorded in an architecture record. The change must identify the affected implementation areas, security and privacy impact, migration impact, rollback approach, and diagram/document updates before implementation.
 
 ## Appendix A. Architecture Traceability
 
@@ -212,15 +300,15 @@ Any proposed change to ingress, Bronze/Silver/Gold boundaries, transformation lo
 | Lakehouse/OneLake analytical branch | Provides durable Delta-based analytical consumption and a foundation for Power BI and semantic interoperability. |
 | Separate semantic layer | Prevents each consumer from independently interpreting clinical fields and relationships. |
 | APIM boundary | Centralizes API authentication, policy, throttling, versioning, and observability while backend adapters constrain data access. |
-| Eight POCs | Reduces architecture risk by validating each major boundary independently and then as an end-to-end path. |
+| Eight validation areas | Reduces architecture risk by validating each major boundary independently and then as an end-to-end path. |
 
 ## Appendix B. Source and Architecture Basis
 
-This document is based on the HIE solution architecture diagram and the prior Intermountain HIE event-handling analysis. The prior analysis identified the need to preserve raw HL7 Base64, maintain a Fabric medallion/real-time analytics path, separate persistence from notification, and validate security, replay, latency, failure handling, and regional recovery. This document supersedes the prior discussion posture only for the specific architecture components and eight POCs expressly established here. Production clinical notification routing remains outside the approved scope unless separately authorized.
+This document is based on the HIE solution architecture diagram and the prior Intermountain HIE event-handling analysis. The prior analysis identified the need to preserve raw HL7 Base64, maintain a Fabric medallion/real-time analytics path, separate persistence from notification, and validate security, replay, latency, failure handling, and regional recovery. This document supersedes the prior discussion posture only for the specific architecture components and eight validation areas expressly established here. Production clinical notification routing remains outside the approved scope unless separately authorized.
 
-## POC 4 Implementation: ePNA Activator Alert
+## ePNA Activator Alert Implementation
 
-The proof-of-concept deployment is in [`infra/`](./infra). Bicep remains the deployment entry point. Fabric **capacity** is a native Azure Resource Manager resource; optionally provision a paid F2 with [`infra/capacity.bicep`](./infra/capacity.bicep). Because Fabric workspaces, Eventhouses, KQL databases, and Activator items are Fabric SaaS resources rather than Azure Resource Manager resources, the Bicep deployment script uses a pre-authorized managed identity to call the supported Fabric REST APIs.
+The deployment implementation is in [`infra/`](./infra). Bicep remains the deployment entry point. Fabric **capacity** is a native Azure Resource Manager resource; optionally provision a paid F2 with [`infra/capacity.bicep`](./infra/capacity.bicep). Because Fabric workspaces, Eventhouses, KQL databases, and Activator items are Fabric SaaS resources rather than Azure Resource Manager resources, the Bicep deployment script uses a pre-authorized managed identity to call the supported Fabric REST APIs.
 
 The deployment creates or reconciles:
 
@@ -242,13 +330,13 @@ transfer or non-qualification.
 
 ### Standards boundary
 
-FHIR does not have a "FHIR v2" release. This POC preserves source **HL7 v2** message version and provenance, then represents Gold clinical entities as **FHIR R4 (4.0.1)** resources using versioned US Core profile canonicals and explicit USCDI/USCDI+ mapping metadata. USCDI+ is a program with domain datasets, not a single FHIR profile. `MappingVersion`, `UscdiVersion`, `UscdiPlusDomain`, and `TerminologyVersion` therefore remain explicit and governed rather than being inferred.
+FHIR does not have a "FHIR v2" release. This implementation preserves source **HL7 v2** message version and provenance, then represents Gold clinical entities as **FHIR R4 (4.0.1)** resources using versioned US Core profile canonicals and explicit USCDI/USCDI+ mapping metadata. USCDI+ is a program with domain datasets, not a single FHIR profile. `MappingVersion`, `UscdiVersion`, `UscdiPlusDomain`, and `TerminologyVersion` therefore remain explicit and governed rather than being inferred.
 
-The generic `GoldFhirResource` table retains the canonical FHIR JSON and lineage. Typed Patient, Encounter, Condition, Observation, ServiceRequest, DiagnosticReport, and Provenance projections provide stable row-and-column entities for POC 6 ontologies, semantic models, and data agents. Terminology-bearing fields always store both system and code; production mappings must bind approved SNOMED CT, LOINC, RxNorm, ICD-10-CM, and local-code translations through the governed terminology service.
+The generic `GoldFhirResource` table retains the canonical FHIR JSON and lineage. Typed Patient, Encounter, Condition, Observation, ServiceRequest, DiagnosticReport, and Provenance projections provide stable row-and-column entities for semantic interoperability, semantic models, and data agents. Terminology-bearing fields always store both system and code; production mappings must bind approved SNOMED CT, LOINC, RxNorm, ICD-10-CM, and local-code translations through the governed terminology service.
 
 ### Alert safety boundary
 
-The POC does not diagnose pneumonia and does not invent clinical scoring thresholds. `EpnaAlertCandidates()` only returns an alert when an upstream, versioned qualification policy has emitted all of the following:
+The implementation does not diagnose pneumonia and does not invent clinical scoring thresholds. `EpnaAlertCandidates()` only returns an alert when an upstream, versioned qualification policy has emitted all of the following:
 
 - `AlertEligible == true`
 - `MonitoringStatus == "qualified"`
@@ -286,7 +374,7 @@ Prerequisites:
 - The `Microsoft.Fabric` resource provider registered in that subscription.
 - A supported region and at least 2 available capacity units of quota for F2. The example uses `westcentralus`; verify regional support and data-residency requirements before deployment.
 - At least one approved **tenant-member user's UPN** for the capacity administrator. B2B guest users cannot be capacity administrators.
-- An approved budget: paid capacity starts incurring charges when provisioned. F2 is a small synthetic-POC starting point, not a sizing recommendation for production HIE traffic.
+- An approved budget: paid capacity starts incurring charges when provisioned. F2 is a small synthetic-test starting point, not a sizing recommendation for production HIE traffic.
 
 Copy [`infra/capacity.example.bicepparam`](./infra/capacity.example.bicepparam) to [`infra/capacity.bicepparam`](./infra/capacity.bicepparam), which is excluded from Git. Review the capacity name, region, and SKU, then set the administrator UPN in the same shell:
 
@@ -314,24 +402,24 @@ After provisioning:
 2. Obtain the new **Fabric capacity UUID** from the Fabric admin portal, or the `id` returned by `GET https://api.fabric.microsoft.com/v1/capacities` as an authorized user. Follow API pagination and verify the capacity name, region, SKU, and state; do not take an arbitrary first result.
 3. Have the capacity administrator grant the deployment identity the required Fabric capacity assignment rights, and confirm its tenant permissions. Azure RBAC and the capacity's human-admin list do not automatically authorize the managed identity in Fabric.
 4. Replace `fabricCapacityId` in your local [`infra/main.bicepparam`](./infra/main.bicepparam) with the new UUID. Keep the existing managed-identity and recipient requirements and `enableActivatorRule = false`.
-5. Use a distinct `workspaceDisplayName`, such as `hie-gold-f2-poc`, or explicitly reassign the existing Gold workspace to the new capacity in Fabric first. The deployment rejects an existing workspace on a different capacity rather than silently keeping it on the trial; it does not perform a migration.
-6. Run the existing Gold workspace deployment command above and complete the synthetic POC acceptance checks.
+5. Use a distinct `workspaceDisplayName`, such as `hie-gold-f2-demo`, or explicitly reassign the existing Gold workspace to the new capacity in Fabric first. The deployment rejects an existing workspace on a different capacity rather than silently keeping it on the trial; it does not perform a migration.
+6. Run the existing Gold workspace deployment command above and complete the synthetic acceptance checks.
 
-**Cost control:** pause the paid capacity in the Azure portal when the POC is not in use, and resume it before testing. Pausing can make the assigned content unavailable, so do not expect continuous Activator monitoring while paused. Remaining smoothed usage/overages can be billed on pause, and storage and other Azure services have separate charges. Review current regional pricing rather than treating F2 or pause/resume as free.
+**Cost control:** pause the paid capacity in the Azure portal when the test environment is not in use, and resume it before testing. Pausing can make the assigned content unavailable, so do not expect continuous Activator monitoring while paused. Remaining smoothed usage/overages can be billed on pause, and storage and other Azure services have separate charges. Review current regional pricing rather than treating F2 or pause/resume as free.
 
-**POC 6:** Microsoft's data-agent prerequisites include a **paid F2 or higher** capacity. F2 removes the trial-capacity limitation, but does not automatically enable or deploy a data agent. Tenant AI settings, regional/cross-geo policy, source access, and clinical governance still require review; this deployment does not change them.
+**Data-agent capacity:** Microsoft's data-agent prerequisites include a **paid F2 or higher** capacity. F2 removes the trial-capacity limitation, but does not automatically enable or deploy a data agent. Tenant AI settings, regional/cross-geo policy, source access, and clinical governance still require review; this deployment does not change them.
 
 References: [native Bicep capacity resource](https://learn.microsoft.com/en-us/azure/templates/microsoft.fabric/2023-11-01/capacities), [capacity provisioning prerequisites](https://learn.microsoft.com/en-us/fabric/enterprise/buy-capacity), [Fabric capacity UUID API](https://learn.microsoft.com/en-us/rest/api/fabric/core/capacities/list-capacities), [pause and resume](https://learn.microsoft.com/en-us/fabric/enterprise/pause-resume), and [data-agent prerequisites](https://learn.microsoft.com/en-us/fabric/data-science/concept-data-agent).
 
-### Trial capacity: POC 4 only
+### Trial capacity: Activator validation only
 
-An existing Fabric trial capacity can be used for the real-time analytics POC, subject to its current status, tenant settings, and the deployment identity's permissions. Use the trial's **capacity UUID**, not an Azure resource ID. The deployment targets a dedicated `hie-gold-poc` workspace; it does not modify the personal **My workspace** shown in the portal.
+An existing Fabric trial capacity can be used for real-time analytics validation, subject to its current status, tenant settings, and the deployment identity's permissions. Use the trial's **capacity UUID**, not an Azure resource ID. The deployment targets a dedicated Gold workspace; it does not modify the personal **My workspace** shown in the portal.
 
 The environment-specific [`infra/main.bicepparam`](./infra/main.bicepparam) is excluded from Git. The local trial configuration contains the selected capacity UUID and keeps the Activator rule disabled. It reads the remaining deployment values from environment variables so missing values stop parameter compilation rather than deploying placeholder identities or recipients:
 
 ```powershell
 $env:FABRIC_DEPLOYMENT_IDENTITY_RESOURCE_ID = '/subscriptions/<subscription-id>/resourceGroups/<identity-resource-group>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<identity-name>'
-$env:EPNA_ALERT_RECIPIENT = '<approved-poc-recipient>'
+$env:EPNA_ALERT_RECIPIENT = '<approved-test-recipient>'
 ```
 
 Set real values in the same shell used to run the deployment command above. The deployment still needs an Azure resource group and permission to use that managed identity. Fabric trial capacity does not provide those Azure resources, and the deployment script's supporting Azure resources can incur charges even though the Fabric capacity is a trial.
@@ -343,11 +431,11 @@ Before deployment:
 - Confirm the trial's remaining lifetime in **OneLake catalog > Govern > Capacities**; preserve synthetic test evidence and plan capacity reassignment before expiry.
 - Use synthetic data only. Trial limitations include unavailable Private Link and some other enterprise controls; a trial is not a production clinical environment.
 
-**POC 6 data-agent deployment is deferred.** Microsoft documents that Fabric trial capacities do not support Fabric data agents. Retain the versioned clinical entities and provenance for later semantic work, then move to a supported paid capacity and validate the relevant tenant and regional prerequisites before deploying the data agent. No ontology, semantic model, or data agent is provisioned by this POC.
+**Data-agent deployment is deferred.** Microsoft documents that Fabric trial capacities do not support Fabric data agents. Retain the versioned clinical entities and provenance for later semantic work, then move to a supported paid capacity and validate the relevant tenant and regional prerequisites before deploying the data agent. No ontology, semantic model, or data agent is provisioned by this deployment.
 
 References: [Fabric trial capabilities and expiry](https://learn.microsoft.com/en-us/fabric/fundamentals/fabric-trial), [features by capacity](https://learn.microsoft.com/en-us/fabric/enterprise/fabric-features), and [workspace creation permissions](https://learn.microsoft.com/en-us/rest/api/fabric/core/workspaces/create-workspace).
 
-### POC acceptance checks
+### Acceptance checks
 
 1. Run `EpnaAlertCandidates()` before ingestion and confirm it returns no rows.
 2. Ingest the synthetic sample with a current `EventTime`; update the included timestamp if needed.

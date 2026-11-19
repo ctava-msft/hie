@@ -1,0 +1,300 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hie-medallion
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aks-medallion
+  namespace: hie-medallion
+  annotations:
+    azure.workload.identity/client-id: REPLACE_WITH_WORKLOAD_IDENTITY_CLIENT_ID
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aks-medallion-config
+  namespace: hie-medallion
+data:
+  EVENT_HUBS_NAMESPACE: REPLACE_WITH_EVENT_HUBS_NAMESPACE
+  EVENT_HUB_NAME: hie-events
+  EVENT_HUB_CONSUMER_GROUP: aks-medallion
+  SERVICE_BUS_NAMESPACE: REPLACE_WITH_SERVICE_BUS_NAMESPACE
+  BRONZE_QUEUE: bronze-ready
+  SILVER_QUEUE: silver-ready
+  STORAGE_ACCOUNT_URL: REPLACE_WITH_STORAGE_ACCOUNT_URL
+  BRONZE_CONTAINER: bronze
+  SILVER_CONTAINER: silver
+  CHECKPOINT_CONTAINER: eventhub-checkpoints
+  QUARANTINE_CONTAINER: quarantine
+  ADX_INGESTION_URL: REPLACE_WITH_ADX_INGESTION_URL
+  ADX_DATABASE: hie_gold
+  GOLD_TABLE: GoldEvent
+  MAX_MESSAGE_BYTES: "1048576"
+  WORKER_CONCURRENCY: "4"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medallion-bronze
+  namespace: hie-medallion
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: medallion-bronze
+  template:
+    metadata:
+      labels:
+        app: medallion-bronze
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: aks-medallion
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: REPLACE_WITH_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MEDALLION_ROLE
+              value: bronze
+          envFrom:
+            - configMapRef:
+                name: aks-medallion-config
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medallion-silver
+  namespace: hie-medallion
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: medallion-silver
+  template:
+    metadata:
+      labels:
+        app: medallion-silver
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: aks-medallion
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: REPLACE_WITH_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MEDALLION_ROLE
+              value: silver
+          envFrom:
+            - configMapRef:
+                name: aks-medallion-config
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medallion-gold
+  namespace: hie-medallion
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: medallion-gold
+  template:
+    metadata:
+      labels:
+        app: medallion-gold
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: aks-medallion
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: REPLACE_WITH_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MEDALLION_ROLE
+              value: gold
+          envFrom:
+            - configMapRef:
+                name: aks-medallion-config
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: azure-service-bus-workload-identity
+  namespace: hie-medallion
+spec:
+  podIdentity:
+    provider: azure-workload
+    identityId: REPLACE_WITH_WORKLOAD_IDENTITY_CLIENT_ID
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: medallion-silver
+  namespace: hie-medallion
+spec:
+  scaleTargetRef:
+    name: medallion-silver
+  pollingInterval: 15
+  cooldownPeriod: 300
+  minReplicaCount: 0
+  maxReplicaCount: 8
+  triggers:
+    - type: azure-servicebus
+      metadata:
+        queueName: bronze-ready
+        namespace: REPLACE_WITH_SERVICE_BUS_RESOURCE_NAME
+        messageCount: "10"
+      authenticationRef:
+        name: azure-service-bus-workload-identity
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: medallion-gold
+  namespace: hie-medallion
+spec:
+  scaleTargetRef:
+    name: medallion-gold
+  pollingInterval: 15
+  cooldownPeriod: 300
+  minReplicaCount: 0
+  maxReplicaCount: 8
+  triggers:
+    - type: azure-servicebus
+      metadata:
+        queueName: silver-ready
+        namespace: REPLACE_WITH_SERVICE_BUS_RESOURCE_NAME
+        messageCount: "10"
+      authenticationRef:
+        name: azure-service-bus-workload-identity

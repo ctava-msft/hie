@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: aks-medallion-${app.role}
+  lifecycle:
+    timeout-per-shutdown-phase: 45s
+server:
+  port: 8080
+  shutdown: graceful
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+app:
+  role: ${MEDALLION_ROLE:}
+  event-hubs-namespace: ${EVENT_HUBS_NAMESPACE:}
+  event-hub-name: ${EVENT_HUB_NAME:hie-events}
+  event-hub-consumer-group: ${EVENT_HUB_CONSUMER_GROUP:aks-medallion}
+  service-bus-namespace: ${SERVICE_BUS_NAMESPACE:}
+  bronze-queue: ${BRONZE_QUEUE:bronze-ready}
+  silver-queue: ${SILVER_QUEUE:silver-ready}
+  storage-account-url: ${STORAGE_ACCOUNT_URL:}
+  bronze-container: ${BRONZE_CONTAINER:bronze}
+  silver-container: ${SILVER_CONTAINER:silver}
+  checkpoint-container: ${CHECKPOINT_CONTAINER:eventhub-checkpoints}
+  quarantine-container: ${QUARANTINE_CONTAINER:quarantine}
+  adx-ingestion-url: ${ADX_INGESTION_URL:}
+  adx-database: ${ADX_DATABASE:hie_gold}
+  gold-table: ${GOLD_TABLE:GoldEvent}
+  max-message-bytes: ${MAX_MESSAGE_BYTES:1048576}
+  worker-concurrency: ${WORKER_CONCURRENCY:4}
