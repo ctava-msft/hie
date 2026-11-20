@@ -7,8 +7,8 @@ Activator rule. Includes Docker packaging, AKS manifests, queue infrastructure, 
 unit tests.
 
 ```text
-Activator -> supported action / Pipeline / UDF adapter
-          -> POST /api/webhooks/activator
+Activator -> Power Automate custom action -> API Management
+          -> POST /api/webhooks/power-automate
           -> Azure Service Bus -> peek-lock worker -> DOWNSTREAM_URL
                                   |
                                   +-> dead-letter queue
@@ -16,6 +16,11 @@ Activator -> supported action / Pipeline / UDF adapter
 Internal operator -> /api/rules/* -> Fabric REST APIs
                                  -> persistent snapshots + deployment records
 ```
+
+The existing `POST /api/webhooks/activator` contract remains available for other
+supported adapters. Java calls Fabric management APIs and the downstream HTTPS
+API directly; **those calls do not need Power Automate**. Power Automate bridges
+an Activator custom action to this application's HTTP intake.
 
 Activator is the detection layer, not the durable subscription/delivery plane.
 This application is a bounded delivery POC, not a patient subscription registry,
@@ -111,12 +116,153 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/webhooks/activator
 
 ### Connecting Activator
 
-Do not assume Activator supports arbitrary direct HTTP callbacks in your tenant.
-Use a supported action (for example a Fabric pipeline or User Data Function) as
-an adapter that POSTs this contract. The adapter must supply both headers above,
-preserve the event key across retries, and retry timeout/`503` outcomes. Store its
-webhook key securely. If upstream never retries an unacknowledged call, this
-application cannot guarantee that call reaches the queue.
+Microsoft documents [Power Automate custom actions](https://learn.microsoft.com/en-us/fabric/real-time-intelligence/data-activator/activator-trigger-power-automate-flows)
+for Activator to call external systems. Do not assume an arbitrary HTTP callback
+is a built-in Activator action. The supplied integration is:
+
+```text
+Activator custom action
+  -> tenant-bound Power Automate flow / custom connector
+  -> HTTPS POST https://<apim-host>/activator/actions (subscription key)
+  -> API Management injects WEBHOOK_API_KEY
+  -> POST /api/webhooks/power-automate
+  -> Service Bus -> Java delivery worker -> DOWNSTREAM_URL
+```
+
+#### Power Automate intake contract
+
+The new endpoint uses the same webhook-only `X-API-Key` authorization, but takes
+two **text** fields rather than requiring the flow to construct request headers:
+
+```http
+POST /api/webhooks/power-automate
+Content-Type: application/json
+X-API-Key: <WEBHOOK_API_KEY>
+
+{"eventId":"synthetic-event-0001.action-1","payloadJson":"{\"synthetic\":true,\"temperatureC\":39}"}
+```
+
+`eventId` has the same safe-ASCII, 1-128-character requirements as the original
+`Idempotency-Key`. It becomes both the broker MessageId and the downstream
+idempotency key. `payloadJson` must contain exactly one JSON **object** as text;
+its UTF-8 bytes are forwarded unchanged, without the envelope. Missing, extra,
+or incorrectly typed envelope fields and invalid payloads return `400`.
+
+The **complete UTF-8 envelope**, including JSON escaping, is limited to 65,536
+bytes. Consequently, a payload that fits the original raw-body endpoint might
+not fit this envelope endpoint. Java returns `413` for an oversized envelope.
+The gateway also checks the schema/size and can return `400` before Java.
+Only confirmed broker acceptance returns
+`202 {"eventId":"synthetic-event-0001.action-1","status":"queued"}`.
+Unconfirmed enqueue still returns `503`; authentication failures return `401`.
+
+#### Deploy the intake gateway
+
+The standalone [API Management Bicep](infra/power-automate.bicep) adds an
+intake-only API and an API-scoped subscription to an **existing** API Management
+service in the deployment resource group. The root [Terraform stack](../../terraform)
+can provision that service; this template does not create a second gateway or
+alter its FHIR API. It imports the [connector schema](power-automate/connector.swagger.json)
+and applies the [intake policy](infra/power-automate-policy.xml).
+
+Prerequisites: a deployed Java service/queue, an APIM-reachable Java HTTPS
+ingress with trusted TLS, and an existing externally reachable HTTPS APIM
+gateway. Enable the new exact path in the [ingress example](deploy/ingress.example.yaml),
+and restrict backend ingress to the gateway through your approved network
+controls. Do not expose rule management or port 8081.
+
+Supply `apimServiceName`, `backendHost` (DNS host only, without scheme, port, or
+path), and the same `webhookApiKey` used by Java. The key is a secure deployment
+parameter stored as a secret APIM named value, never a template output. Prefer
+a [Key Vault parameter reference](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/key-vault-parameter)
+instead of putting its value in command-line history. A private parameter file
+can use:
+
+```json
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "apimServiceName": {"value": "<existing-apim-name>"},
+    "backendHost": {"value": "activator.example.com"},
+    "webhookApiKey": {
+      "reference": {
+        "keyVault": {"id": "<key-vault-resource-id>"},
+        "secretName": "fabric-activator-webhook-key"
+      }
+    }
+  }
+}
+```
+
+Configure Key Vault's template-deployment access and the deployer's permissions
+as described in that reference. Deploy from the service directory:
+
+```powershell
+az deployment group create --resource-group <apim-resource-group> `
+  --name fabric-activator-power-automate `
+  --template-file .\infra\power-automate.bicep `
+  --parameters '@C:\private\power-automate.parameters.json'
+```
+
+Outputs contain only gateway/action URLs and the subscription resource ID.
+Retrieve a key for the `fabric-activator-power-automate` subscription securely
+in the APIM portal; do not use an all-APIs or administrative subscription.
+The policy overwrites the backend webhook credential, strips the APIM
+subscription/Authorization headers and unmatched query parameters, and forwards
+the body and backend statuses without following redirects. It does not convert
+errors/timeouts into `202`. Review inherited gateway policies too.
+
+#### Create and bind the Power Automate flow
+
+1. In the approved Power Automate environment, [create a custom connector from
+   OpenAPI 2.0](https://learn.microsoft.com/en-us/connectors/custom-connectors/define-openapi-definition)
+   using [the supplied definition](power-automate/connector.swagger.json).
+   Replace its placeholder **Host** with the hostname from `gatewayUrl`; keep
+   HTTPS and base URL `/activator`. Create its connection with the API-scoped
+   subscription key. The flow never needs Java's admin or webhook key.
+2. In the target Activator item's rule, choose **New custom action**, add text
+   input fields `EventId` and `PayloadJson`, and use **Open flow builder**.
+   Paste the Activator-generated connection string into the prepopulated trigger
+   as Microsoft's custom-action instructions require. This is a tenant-specific
+   secret/binding; do not put it in source control.
+3. Add this connector's **Queue an Activator action** operation. Map `eventId` to
+   `triggerBody()?['customProperties/EventId']` and `payloadJson` to
+   `triggerBody()?['customProperties/PayloadJson']`, using the documented input
+   field syntax. Pass the event JSON as text, not the entire Activator trigger
+   envelope.
+4. Configure the rule's inputs from the agreed source event/action contract.
+   `EventId` must be stable across trigger redelivery, action retries, and manual
+   flow resubmission. Include a stable action/rule identifier when one source
+   event can cause multiple actions. **Never use `guid()`, `utcNow()`, or the
+   Power Automate run ID** as the delivery key. They can change on resubmission.
+   If the source cannot supply a durable action key, resolve that integration
+   prerequisite instead of inventing a new key on each attempt.
+5. Enable a bounded exponential retry policy on the connector action for
+   timeout/`408`/`429`/`5xx` outcomes (for example four retries starting at ten
+   seconds). Preserve both text inputs on retries; remediate permanent failures
+   rather than ignoring them. A `202` receipt ends intake, not downstream
+   processing; this API supplies no polling URL.
+6. Enable **Secure Inputs**/**Secure Outputs** wherever supported on the trigger
+   and payload-bearing actions. Apply approved flow ownership, connection access,
+   Power Platform DLP, licensing, retention, and monitoring policies. Disable
+   payload/credential tracing in APIM and other intermediaries. The generated
+   APIM subscription has tracing disabled, but that is not a complete PHI policy.
+7. Save the flow, select that custom action on the reviewed rule, and test with
+   synthetic data. Verify broker acceptance, same-key resubmission/deduplication,
+   queue failure/retry, downstream delivery/DLQ, and rejection of missing,
+   incorrect, or differently scoped subscription keys before enabling real events.
+
+**Azure ARM/Bicep does not deploy a Power Automate cloud flow or establish the
+Activator trigger binding.** The Bicep and OpenAPI assets provision the Azure
+intake boundary; the supported flow-builder steps above are still required in
+the target tenant. No guessed Activator trigger-registration API or substitute
+Logic App is presented as a Power Automate deployment.
+
+Other supported adapters may continue POSTing the original webhook contract
+with both headers and a stable key. If the upstream flow/adapter never retries
+an unacknowledged call, this application cannot guarantee that call reaches the
+queue. Monitor failed flow runs as well as Service Bus dead letters.
 
 ## Delivery guarantees and operating limits
 
@@ -335,8 +481,8 @@ or a developer's credential cache into an image.
    workload-identity deployment.
 
 5. Configure TLS, DNS, and an ingress controller. The optional
-   [ingress example](deploy/ingress.example.yaml) exposes **only** the exact
-   webhook path. Replace the example host, ingress class and TLS Secret; enforce
+   [ingress example](deploy/ingress.example.yaml) exposes **only** the two exact
+   webhook paths. Replace the example host, ingress class and TLS Secret; enforce
    HTTPS, caller restrictions/rate limits, and relevant network policies in your
    gateway. Do not expose `/api/rules/*` or port 8081 publicly.
    The service is ClusterIP; internal management can be accessed through:
@@ -369,7 +515,18 @@ Tests cover enqueue acknowledgment/failure, payload validation and limits, API-k
 separation, downstream status/retry/dead-letter behavior, stable delivery keys,
 string/object rule instances, graph preservation, ambiguous-condition rejection,
 Fabric synchronous/asynchronous API flows, operation-URL trust, deployment
-snapshots, stale checksums, dry runs, failure auditing, and rollback.
+snapshots, stale checksums, dry runs, failure auditing, and rollback. Power
+Automate intake tests also verify envelope/key boundaries, UTF-8 byte limits,
+unchanged embedded payload bytes, retry keys, and real servlet authorization.
 
-Live Azure connectivity, AKS ingress/TLS, Fabric permissions, and clinical rule
+For gateway/connector contract checks (Python 3) and Bicep compilation, from the
+service directory:
+
+```powershell
+python -m unittest discover -s ..\..\tests -p test_power_automate.py
+az bicep build --file .\infra\power-automate.bicep --outfile .\target\power-automate-arm.json
+```
+
+Live Azure connectivity, APIM policies/subscriptions, Power Automate connection
+and trigger binding, AKS ingress/TLS, Fabric permissions, and clinical rule
 evaluation require environment-specific integration testing.

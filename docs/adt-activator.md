@@ -5,14 +5,16 @@
 The complete [Fabric Activator delivery service](../services/fabric-rt-actuator)
 was copied from [ctava-msft/fabric-rt-actuator](https://github.com/ctava-msft/fabric-rt-actuator)
 at commit [`94626e706d93092557b7eaaa1830fd4b93d34cec`](https://github.com/ctava-msft/fabric-rt-actuator/tree/94626e706d93092557b7eaaa1830fd4b93d34cec).
-All 32 upstream tracked files are preserved unchanged, including source, tests,
+The original import included all 32 upstream tracked files: source, tests,
 configuration examples, Docker packaging, AKS manifests, and Service Bus Bicep.
+The service has since been extended with Power Automate intake, a custom
+connector definition, and standalone API Management infrastructure described below.
 The source repository's Git history is not imported. No upstream license file
 was present at that commit; this copy does not introduce a new license.
 
-This is a **copy-and-document integration**, not a working Epic interface or
+This is a **delivery/action-integration POC**, not a working Epic interface or
 patient subscription engine. It does not change the existing HAPI FHIR service,
-Gold schema, Fabric templates, or Azure deployments.
+Gold schema, Fabric templates, or root Azure deployments.
 
 ## Position in the HIE architecture
 
@@ -28,14 +30,15 @@ Epic ADT -> Azure Event Hubs -> Fabric Eventstream
               |    -> patient/encounter-specific Activator configuration
               |
               +-> Activator detection
-                   -> supported Pipeline / User Data Function action adapter
-                   -> POST /api/webhooks/activator
+                   -> Power Automate custom action [tenant binding required]
+                   -> API Management -> POST /api/webhooks/power-automate
                    -> Azure Service Bus -> delivery worker -> downstream HTTPS API
 ```
 
-The imported service implements webhook intake, queuing, delivery, and a bounded
-existing-rule editor. It does **not** implement the ADT ingestion/normalization,
-subscription controller, or Activator action adapter shown above. The existing
+The service implements webhook intake, queuing, delivery, and a bounded
+existing-rule editor, and now supplies the Power Automate connector/gateway
+assets. The flow must still be created and bound in the target tenant. It does
+**not** implement ADT ingestion/normalization or the subscription controller. The existing
 [FHIR Gold POC](./fhir-gold-poc.md) also starts with synthetic Gold events, not a
 production Epic feed.
 
@@ -44,6 +47,8 @@ production Epic feed.
 | Surface | Imported behavior |
 |---|---|
 | `POST /api/webhooks/activator` | Accepts a JSON object up to 65,536 bytes with a webhook `X-API-Key` and stable `Idempotency-Key`; confirms broker acceptance with HTTP 202. It is not a raw HL7, Base64, MLLP, or Epic-specific endpoint. |
+| `POST /api/webhooks/power-automate` | Accepts exactly two text fields, `eventId` and `payloadJson`, using the webhook key. The entire UTF-8 envelope is limited to 65,536 bytes. Validates and forwards the embedded JSON object's bytes unchanged, reusing `eventId` for broker/downstream idempotency; confirms broker acceptance with HTTP 202. |
+| Power Automate integration assets | OpenAPI 2.0 connector plus Bicep that adds an HTTPS, subscription-protected intake API to existing API Management. The tenant-specific Activator trigger/flow binding is a required setup step, not deployed by ARM. |
 | Downstream delivery | Forwards the unchanged body to one configured HTTPS `DOWNSTREAM_URL`, optionally using `DOWNSTREAM_BEARER_TOKEN`. Delivery is at least once with bounded retries and dead-lettering, not exactly once. |
 | Rule management | Reads an existing Fabric Reflex definition and updates one numeric `temperatureC` condition in one existing rule/trigger entity. Requires the separate admin key, reviewed checksum, and explicit dry run. |
 | Deployment records | Stores before/desired definitions and deployment records, verifies changes by read-back, and supports reviewed whole-definition rollback. |
@@ -53,10 +58,18 @@ It does not maintain patient/encounter subscriptions or choose destinations per
 patient. A patient identifier in a webhook body is forwarded data, not a routing
 or authorization instruction. No patient-specific HTTP API is added by this copy.
 
-Activator must call a supported action adapter that supplies the webhook headers
-and preserves the same idempotency key across retries. Do not assume arbitrary
-direct HTTP callbacks are supported in the target Fabric tenant. The downstream
-API must persistently deduplicate that key atomically with its side effect.
+**Java does not need to call Fabric management or downstream APIs through Power
+Automate.** Its documented Reflex REST API calls and worker HTTPS calls remain
+direct. Power Automate is the supported **Activator-to-HTTP custom action**
+adapter in this integration, not a mandatory proxy for Java. See Microsoft's
+[custom-action documentation](https://learn.microsoft.com/en-us/fabric/real-time-intelligence/data-activator/activator-trigger-power-automate-flows)
+and [Reflex definition API](https://learn.microsoft.com/en-us/rest/api/fabric/reflex/items/update-reflex-definition).
+
+The flow must preserve the same source event/action key across retries and
+resubmissions; do not use a generated GUID, timestamp, or flow run ID. Do not
+assume arbitrary direct HTTP callbacks are supported in the target Fabric
+tenant. The downstream API must persistently deduplicate that key atomically
+with its side effect.
 
 ### Existing ePNA deployment is separate
 
@@ -102,8 +115,17 @@ Follow the imported [service README](../services/fabric-rt-actuator/README.md)
 for the webhook examples, queue guarantees, rule workflow, Docker Compose, and
 AKS instructions. Use the service directory as the Docker build context.
 The [Service Bus template](../services/fabric-rt-actuator/infra/servicebus.bicep)
-and [AKS manifest](../services/fabric-rt-actuator/deploy/aks.yaml) are standalone;
-the root Bicep/Terraform deployments do not deploy them automatically.
+and [AKS manifest](../services/fabric-rt-actuator/deploy/aks.yaml) are standalone.
+The new [Power Automate intake Bicep](../services/fabric-rt-actuator/infra/power-automate.bicep)
+also deploys separately; it can reuse the root Terraform stack's API Management.
+The root Bicep/Terraform deployments do not deploy these assets automatically.
+Follow the service README's **Connecting Activator** section to deploy the
+gateway, import the [custom connector](../services/fabric-rt-actuator/power-automate/connector.swagger.json),
+and create/bind the Power Automate flow. Configure the existing APIM name, an
+APIM-reachable Java HTTPS ingress host, and the webhook key via secure deployment
+parameters. Store the API-scoped subscription key in the connector connection,
+not in Java or the Activator definition. No live cloud flow is created by the
+Azure template.
 Keep management routes internal and use approved secret delivery, TLS, identity,
 payload retention, and audit-storage controls before handling patient data.
 
@@ -134,6 +156,7 @@ subscription lifecycle in addition to this delivery service:
 
 Use synthetic events to verify admission, repeated admission, simultaneous
 patients/encounters, discharge, delayed events, action retries, and dead letters
-before connecting a real feed. The imported automated tests validate the service
-contracts, not live Epic ingestion, Fabric clinical rule evaluation, or the
-unimplemented patient subscription lifecycle.
+before connecting a real feed. The automated tests validate the service and connector/gateway contracts,
+including Power Automate envelope validation and unchanged delivery semantics,
+not live Epic ingestion, tenant flow binding, Fabric clinical rule evaluation,
+or the unimplemented patient subscription lifecycle.

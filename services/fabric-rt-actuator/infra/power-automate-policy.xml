@@ -1,0 +1,23 @@
+<policies>
+  <inbound>
+    <base />
+    <validate-content unspecified-content-type-action="prevent" max-size="65536" size-exceeded-action="prevent">
+      <content type="application/json" validate-as="json" action="prevent" />
+    </validate-content>
+    <rewrite-uri template="/api/webhooks/power-automate" copy-unmatched-params="false" />
+    <set-header name="X-API-Key" exists-action="override">
+      <value>{{fabric-activator-webhook-key}}</value>
+    </set-header>
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <set-header name="Authorization" exists-action="delete" />
+  </inbound>
+  <backend>
+    <forward-request timeout="30" follow-redirects="false" />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

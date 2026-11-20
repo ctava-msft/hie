@@ -1,0 +1,81 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Fabric Activator delivery",
+    "version": "1.0.0",
+    "description": "Queue an Activator action for durable API delivery. A 202 response confirms queue acceptance, not downstream completion."
+  },
+  "host": "replace-with-apim-host.example.invalid",
+  "basePath": "/activator",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "securityDefinitions": {
+    "subscriptionKey": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "Ocp-Apim-Subscription-Key"
+    }
+  },
+  "security": [{"subscriptionKey": []}],
+  "paths": {
+    "/actions": {
+      "post": {
+        "operationId": "QueueActivatorAction",
+        "summary": "Queue an Activator action",
+        "description": "Reuse the source event/action key on every retry or flow resubmission. The complete UTF-8 request envelope must not exceed 65536 bytes.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {"$ref": "#/definitions/ActivatorAction"}
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Service Bus accepted the action.",
+            "schema": {"$ref": "#/definitions/QueueReceipt"}
+          },
+          "400": {"description": "Invalid envelope, event key, JSON payload, or gateway content validation failure."},
+          "401": {"description": "Missing or invalid subscription key or backend webhook credential."},
+          "413": {"description": "Java intake rejected an envelope larger than 65536 bytes."},
+          "503": {"description": "Queue acceptance was not confirmed. Retry using the same eventId."},
+          "default": {"description": "Request failed. Never treat a gateway error or timeout as queue acceptance."}
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ActivatorAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "payloadJson"],
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+          "x-ms-summary": "Stable source event/action key",
+          "description": "Opaque, globally unique source event plus action identifier, without patient data. Do not use guid(), utcNow(), or a flow run ID."
+        },
+        "payloadJson": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 65536,
+          "x-ms-summary": "Event JSON",
+          "description": "A JSON object encoded as text. Java forwards its UTF-8 bytes unchanged, without the Power Automate envelope."
+        }
+      }
+    },
+    "QueueReceipt": {
+      "type": "object",
+      "required": ["eventId", "status"],
+      "properties": {
+        "eventId": {"type": "string"},
+        "status": {"type": "string", "enum": ["queued"]}
+      }
+    }
+  }
+}

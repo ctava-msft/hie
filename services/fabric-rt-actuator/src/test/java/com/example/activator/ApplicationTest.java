@@ -10,6 +10,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
@@ -51,6 +52,28 @@ class ApplicationTest {
                 .POST(HttpRequest.BodyPublishers.ofString("{\"synthetic\":true}")).build();
         assertEquals(202, http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode());
         verify(publisher).publish(eq("integration-event"), any(byte[].class));
+    }
+
+    @Test
+    void receivesPowerAutomateActionThroughRunningServer() throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/webhooks/power-automate"))
+                .header("Content-Type", "application/json").header("X-API-Key", TestProperties.WEBHOOK_KEY)
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        "{\"eventId\":\"integration-flow-event\",\"payloadJson\":\"{\\\"synthetic\\\":true}\"}"))
+                .build();
+        assertEquals(202, http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode());
+        verify(publisher).publish(eq("integration-flow-event"),
+                eq("{\"synthetic\":true}".getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void powerAutomateRequiresWebhookCredentialThroughRunningServer() throws Exception {
+        var builder = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/webhooks/power-automate"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{}"));
+        assertEquals(401, http.send(builder.build(), HttpResponse.BodyHandlers.discarding()).statusCode());
+        assertEquals(401, http.send(builder.header("X-API-Key", TestProperties.ADMIN_KEY).build(),
+                HttpResponse.BodyHandlers.discarding()).statusCode());
     }
 
     @Test

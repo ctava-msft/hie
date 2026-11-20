@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class ApiErrors {
     private static final Logger LOG = LoggerFactory.getLogger(ApiErrors.class);
 
+    public static class PayloadTooLarge extends RuntimeException {}
+
     public static class Conflict extends RuntimeException {
         public Conflict(String message) {
             super(message);
@@ -34,6 +36,11 @@ public class ApiErrors {
             HttpMessageNotReadableException.class})
     ResponseEntity<Map<String, String>> badRequest(Exception exception) {
         return ResponseEntity.badRequest().body(Map.of("error", "Invalid request; inspect the documented schema"));
+    }
+
+    @ExceptionHandler(PayloadTooLarge.class)
+    ResponseEntity<Map<String, String>> payloadTooLarge(PayloadTooLarge exception) {
+        return ResponseEntity.status(413).body(Map.of("error", "Maximum payload size is 65536 bytes"));
     }
 
     @ExceptionHandler(Conflict.class)

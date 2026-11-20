@@ -20,3 +20,10 @@ spec:
                 name: fabric-activator
                 port:
                   number: 8080
+          - path: /api/webhooks/power-automate
+            pathType: Exact
+            backend:
+              service:
+                name: fabric-activator
+                port:
+                  number: 8080
