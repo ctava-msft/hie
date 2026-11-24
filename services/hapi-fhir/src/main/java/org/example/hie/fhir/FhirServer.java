@@ -35,11 +35,44 @@ import org.eclipse.jetty.server.Server;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.OperationOutcome;
+import org.postgresql.ds.PGSimpleDataSource;
 
 public final class FhirServer {
     private FhirServer() { }
 
     public static void main(String[] args) throws Exception {
+        String baseUrl = required("FHIR_BASE_URL");
+        URI base = URI.create(baseUrl);
+        if (!"https".equals(base.getScheme()) || base.getHost() == null || base.getUserInfo() != null
+                || base.getQuery() != null || base.getFragment() != null || !"/fhir".equals(base.getPath())) {
+            throw new IllegalArgumentException("FHIR_BASE_URL must be the external HTTPS APIM URL ending in /fhir.");
+        }
+        Server server = create(8080, baseUrl, configuredStore());
+        server.setStopAtShutdown(true);
+        server.start();
+        server.join();
+    }
+
+    static GoldStore configuredStore() throws java.net.URISyntaxException {
+        String backend = System.getenv().getOrDefault("GOLD_STORE", "eventhouse");
+        if ("postgresql".equals(backend)) {
+            var source = new PGSimpleDataSource();
+            source.setServerNames(new String[] {required("POSTGRES_HOST")});
+            source.setDatabaseName(required("POSTGRES_DATABASE"));
+            source.setUser(required("POSTGRES_USER"));
+            source.setPassword(required("POSTGRES_PASSWORD"));
+            source.setSslMode("verify-full");
+            String rootCert = System.getenv("POSTGRES_SSL_ROOT_CERT");
+            if (rootCert != null && !rootCert.isBlank()) {
+                source.setSslRootCert(rootCert);
+            }
+            source.setConnectTimeout(10);
+            source.setSocketTimeout(30);
+            return new PostgresGoldStore(source);
+        }
+        if (!"eventhouse".equals(backend)) {
+            throw new IllegalArgumentException("GOLD_STORE must be eventhouse or postgresql.");
+        }
         String endpoint = required("GOLD_QUERY_URI");
         if (!endpoint.matches("https://[a-z0-9-]+(\\.[a-z0-9-]+)*\\.kusto\\.fabric\\.microsoft\\.com")) {
             throw new IllegalArgumentException("GOLD_QUERY_URI must be a Fabric Eventhouse HTTPS query endpoint.");
@@ -48,21 +81,12 @@ public final class FhirServer {
         if (!database.matches("[A-Za-z0-9][A-Za-z0-9_-]{0,127}")) {
             throw new IllegalArgumentException("GOLD_DATABASE must be a KQL database name or UUID.");
         }
-        String baseUrl = required("FHIR_BASE_URL");
-        URI base = URI.create(baseUrl);
-        if (!"https".equals(base.getScheme()) || base.getHost() == null || base.getUserInfo() != null
-                || base.getQuery() != null || base.getFragment() != null || !"/fhir".equals(base.getPath())) {
-            throw new IllegalArgumentException("FHIR_BASE_URL must be the external HTTPS APIM URL ending in /fhir.");
-        }
         for (String name : Set.of("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_FEDERATED_TOKEN_FILE")) {
             required(name);
         }
         var credential = new WorkloadIdentityCredentialBuilder().build();
         Client client = ClientFactory.createClient(ConnectionStringBuilder.createWithTokenCredential(endpoint, credential));
-        Server server = create(8080, baseUrl, new KustoGoldStore(client, database));
-        server.setStopAtShutdown(true);
-        server.start();
-        server.join();
+        return new KustoGoldStore(client, database);
     }
 
     private static String required(String name) {

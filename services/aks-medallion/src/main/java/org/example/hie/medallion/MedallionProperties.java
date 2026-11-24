@@ -19,6 +19,7 @@ public record MedallionProperties(
         String silverContainer,
         String checkpointContainer,
         String quarantineContainer,
+        String goldBackend,
         String adxIngestionUrl,
         String adxDatabase,
         String goldTable,
@@ -36,6 +37,10 @@ public record MedallionProperties(
                 ? "eventhub-checkpoints" : checkpointContainer;
         quarantineContainer = quarantineContainer == null || quarantineContainer.isBlank()
                 ? "quarantine" : quarantineContainer;
+        goldBackend = goldBackend == null || goldBackend.isBlank() ? "adx" : goldBackend;
+        if (!goldBackend.equals("adx") && !goldBackend.equals("postgresql")) {
+            throw new IllegalArgumentException("app.gold-backend must be adx or postgresql");
+        }
         adxIngestionUrl = adxIngestionUrl == null ? "" : adxIngestionUrl;
         adxDatabase = adxDatabase == null || adxDatabase.isBlank() ? "hie_gold" : adxDatabase;
         goldTable = goldTable == null || goldTable.isBlank() ? "GoldEvent" : goldTable;

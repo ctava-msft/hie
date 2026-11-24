@@ -30,7 +30,7 @@ public final class CapabilityProvider extends ServerCapabilityStatementProvider 
         statement.addFormat("application/fhir+json");
         statement.getSoftware().setName("HIE Gold HAPI FHIR").setVersion("0.1.0");
         statement.getImplementation().setUrl(baseUrl).setDescription(
-                "Read-only R4 virtualization over Gold Eventhouse. No JPA repository, writes, history, "
+                "Read-only R4 virtualization over the configured Gold store. No JPA repository, writes, history, "
                 + "subscriptions, includes, chained searches or terminology operations. "
                 + "Single exact search values only. _count=1..100; _offset=0..10000. "
                 + "Paging is ordered by logical ID over live data, not a snapshot; totals are omitted.");

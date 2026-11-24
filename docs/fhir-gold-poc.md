@@ -22,6 +22,10 @@ This implements **Option 1: direct virtualization**, not the HAPI JPA starter.
 plain `RestfulServer` with custom resource providers. Gold's canonical R4 JSON
 is returned as FHIR resources. No SQL, Cosmos, PostgreSQL, JPA repository,
 clinical persistent volume or second Gold database is created.
+The separate Changes-10 AKS option now also offers a PostgreSQL-backed,
+read-only projection; see the [AKS architecture](azure-aks-medallion-architecture.md)
+and [service configuration](../services/aks-medallion/README.md). The
+Eventhouse deployment and instructions below remain unchanged.
 
 [Terraform](../terraform/README.md) provisions Azure hosting and identities.
 The existing [Fabric Bicep deployment](../infra/main.bicep) creates/reconciles

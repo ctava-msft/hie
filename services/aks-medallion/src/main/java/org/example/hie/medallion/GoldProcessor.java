@@ -13,6 +13,7 @@ import java.time.Instant;
 import org.example.hie.medallion.StageRecords.GoldRecord;
 import org.example.hie.medallion.StageRecords.SilverRecord;
 import org.example.hie.medallion.StageRecords.StagePointer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -23,22 +24,35 @@ class GoldProcessor {
     private final ObjectMapper json;
     private final TokenCredential credential;
     private final HttpClient http;
+    private final ObjectProvider<PostgresGoldStore> postgres;
 
     GoldProcessor(MedallionProperties properties, StorageSupport storage, ObjectMapper json,
-                  TokenCredential credential, HttpClient http) {
+                  TokenCredential credential, HttpClient http, ObjectProvider<PostgresGoldStore> postgres) {
         this.properties = properties;
         this.storage = storage;
         this.json = json;
         this.credential = credential;
         this.http = http;
+        this.postgres = postgres;
     }
 
     void process(StagePointer pointer) {
         SilverRecord silver = storage.readJson(
                 properties.silverContainer(), pointer.blobName(), SilverRecord.class);
+        if (!pointer.eventId().equals(silver.eventId())) {
+            throw new PermanentStageException("SilverIdentityMismatch", null);
+        }
         GoldRecord gold = new GoldRecord(
                 "1.0", silver.eventId(), silver.source(), silver.eventType(), silver.eventTime(),
                 Instant.now(), pointer.blobName(), pointer.payloadHash(), silver.payload());
+        if (properties.goldBackend().equals("postgresql")) {
+            PostgresGoldStore store = postgres.getIfAvailable();
+            if (store == null) {
+                throw new IllegalStateException("PostgreSQL Gold store is not configured");
+            }
+            store.commit(gold);
+            return;
+        }
         try {
             if (properties.adxIngestionUrl().isBlank()) {
                 throw new IllegalStateException("app.adx-ingestion-url is required");

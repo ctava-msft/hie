@@ -9,7 +9,7 @@ public interface GoldStore {
 
     final class Unavailable extends RuntimeException {
         public Unavailable() {
-            super("Gold Eventhouse is unavailable or returned an invalid response.");
+            super("Gold store is unavailable or returned an invalid response.");
         }
     }
 }

@@ -31,6 +31,7 @@ app:
   silver-container: ${SILVER_CONTAINER:silver}
   checkpoint-container: ${CHECKPOINT_CONTAINER:eventhub-checkpoints}
   quarantine-container: ${QUARANTINE_CONTAINER:quarantine}
+  gold-backend: ${GOLD_BACKEND:adx}
   adx-ingestion-url: ${ADX_INGESTION_URL:}
   adx-database: ${ADX_DATABASE:hie_gold}
   gold-table: ${GOLD_TABLE:GoldEvent}

@@ -1,98 +1,130 @@
 # AKS Medallion Service
 
 One Java 21 Spring Boot image implements the Bronze, Silver, and Gold roles.
-The `MEDALLION_ROLE` environment variable selects one independently deployed
-pipeline stage:
+`MEDALLION_ROLE` selects an independently deployed stage. Changes-10 calls for
+separate internal Epic HL7 and external USCDI pipelines:
 
 ```text
-Event Hubs -> Bronze AKS -> ADLS Bronze -> Service Bus -> AKS Silver
-          -> ADLS Silver -> Service Bus -> AKS Gold -> ADX
+Each source -> its Event Hub -> AKS Bronze -> ADLS Bronze
+  -> Service Bus -> AKS Silver -> ADLS Silver -> Service Bus
+  -> AKS Gold -> PostgreSQL FHIR event + current state
+                      |-> AKS HAPI FHIR, read-only
+                      |-> Fabric replication -> Clinical NRT analytics (planned)
 ```
 
-## Scope
+Isolate event hubs, consumer groups, queues, ADLS paths and identities per
+pipeline. Deploy separate PostgreSQL databases, or explicitly design source
+isolation and collision-free FHIR IDs before sharing one. The checked-in
+manifest and deployment script currently deploy only a single ADX pipeline;
+they do not provision this two-pipeline PostgreSQL design.
 
-The initial implementation proves durable transport, stage commits, replay
-identity, queue dead-lettering, and ADX ingestion. It accepts JSON object
-payloads in the Silver normalizer. Production HL7 v2 parsing, FHIR validation,
-USCDI+ mapping, terminology translation, and clinical rules require approved,
-versioned mapping components. Invalid or unsupported payloads move to the
-Service Bus dead-letter queue with a sanitized reason.
-
-## Roles
+## What works today
 
 | Role | Input | Commit | Output |
 |---|---|---|---|
-| `bronze` | Event Hubs | ADLS Bronze | `bronze-ready` stage pointer |
-| `silver` | `bronze-ready` | ADLS Silver | `silver-ready` stage pointer |
-| `gold` | `silver-ready` | ADX `GoldEvent` | KQL/Eventhouse-equivalent record |
+| `bronze` | Event Hub | ADLS Bronze JSON | `bronze-ready` pointer |
+| `silver` | `bronze-ready` | ADLS Silver JSON | `silver-ready` pointer |
+| `gold`, `GOLD_BACKEND=adx` (default) | `silver-ready` | ADX `GoldEvent` | ADX projection |
+| `gold`, `GOLD_BACKEND=postgresql` | `silver-ready` | PostgreSQL event and current FHIR resource, atomically | HAPI-readable projection |
 
-Queue completion occurs only after the target commit is confirmed. Bronze and
-Silver can overwrite the deterministic event blob safely, giving replay an
-idempotent storage effect. A Gold event ID is sent to ADX as the stable
-idempotency/correlation value.
+Messages are completed only after the stage succeeds. PostgreSQL uniqueness
+on `(source, event_id)` makes identical replay idempotent and rejects a
+conflicting reuse of an event ID. Current state uses FHIR `meta.lastUpdated`:
+newer versions replace older ones, older arrivals cannot roll back current
+state, and conflicting payloads at the same timestamp are rejected. Event
+history and current state commit together.
 
-## Required identities
+PostgreSQL Gold currently accepts one JSON FHIR resource per Silver record,
+with a valid logical `id`, a supported `resourceType`, and an explicitly
+supplied timezone-qualified `meta.lastUpdated` with no sub-microsecond
+precision. Supported types are Patient, Encounter, Condition, Observation,
+ServiceRequest, DiagnosticReport and Provenance. Producers must supply
+strictly increasing timestamps for different versions of the same resource,
+use identical JSON for equal-version replays, and agree on globally unique IDs
+in any shared database. Deletes/tombstones, cross-source identity matching and
+FHIR write operations are not supported. Shape checks are not full FHIR,
+terminology, clinical or implementation-guide validation.
 
-All stages use `DefaultAzureCredential`. On AKS this resolves workload
-identity; local development can use Azure CLI. The identity requires:
+The Silver processor currently accepts JSON objects only; it does **not** parse
+HL7 v2, CDA or USCDI, validate FHIR, or perform approved clinical mappings.
+Unsupported Gold payloads are dead-lettered with a sanitized reason. Do not
+enable clinical consumers until the required mappings and controls are
+implemented and approved.
 
-- Event Hubs Data Owner on the `hie-events` Event Hub;
-- Service Bus Data Owner on the namespace;
-- Storage Blob Data Contributor on the ADLS account; and
-- ADX `Ingestor` on the `hie_gold` database.
+## PostgreSQL and HAPI configuration
 
-The Bicep deployment creates these assignments. Do not add broker or storage
-connection strings to Kubernetes configuration.
+Provision PostgreSQL separately with private networking, verified TLS,
+backups and approved access controls. Apply
+[postgresql-gold.sql](../../infra/aks-medallion/postgresql-gold.sql) as a
+schema administrator; it creates the `hie_gold.fhir_event` and
+`hie_gold.fhir_current` tables. This is a custom projection, **not** the HAPI
+JPA schema. Grant the Gold writer schema `USAGE`, table `SELECT`/`INSERT` on
+`fhir_event` and `SELECT`/`INSERT`/`UPDATE` on `fhir_current`. Grant HAPI
+schema `USAGE` and only `SELECT` on `fhir_current`. Use separate identities.
+Manage migrations and grants independently of the application.
 
-## Infrastructure and deployment
+Configure the Gold deployment with `GOLD_BACKEND=postgresql` and HAPI with
+`GOLD_STORE=postgresql`. Each requires:
 
-The Bicep template provisions private AKS, ACR, ADLS Gen2, Event Hubs, Service
-Bus Premium, ADX, private endpoints, Log Analytics, KEDA, workload identity,
-federation, data-plane RBAC, and the `GoldEvent` schema.
+- `POSTGRES_HOST`: server DNS name, without protocol or port;
+- `POSTGRES_DATABASE`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`;
+- optionally `POSTGRES_SSL_ROOT_CERT`: path to the trusted CA certificate.
+
+The JDBC clients use port 5432 and `sslmode=verify-full`. Mount a trusted CA
+at the driver's default location or set the certificate path. Supply passwords
+via an approved secret mechanism, not a ConfigMap or source control. The
+current implementation uses database password authentication and opens a JDBC
+connection per operation; managed-identity token authentication and connection
+pool sizing/rotation are not implemented.
+
+The [HAPI FHIR service](../hapi-fhir) uses its existing read/search-only R4
+providers and parameterized PostgreSQL queries. It is not a full HAPI FHIR JPA
+server. It defaults to its existing Fabric Eventhouse backend unless
+`GOLD_STORE` is set. Its current
+[deployment script](../../scripts/deploy-hapi.ps1) and
+[manifest](../../kubernetes/hapi-fhir.yaml) configure Eventhouse, not the
+PostgreSQL option; adapt deployment configuration and secret mounting before
+using PostgreSQL.
+
+Fabric Mirroring or an approved CDC/ADF mechanism must be configured
+separately. Verify PostgreSQL service, region, type support (including JSONB),
+keys, deletes, connectivity and latency before choosing a connector. Fabric
+is a downstream read-only analytical copy, not a clinical write path.
+
+## Existing ADX deployment
+
+The original [Bicep template](../../infra/aks-medallion/main.bicep) and
+[deployment script](../../scripts/deploy-aks-medallion.ps1) provision and
+configure the ADX variant, not PostgreSQL or Fabric replication:
 
 ```powershell
 Copy-Item .\infra\aks-medallion\main.example.bicepparam `
   .\infra\aks-medallion\main.bicepparam
-
-# Replace the Entra AKS admin group object ID, then run from the repo root.
 .\scripts\deploy-aks-medallion.ps1 `
   -ResourceGroup rg-hie-medallion `
   -BicepParameters .\infra\aks-medallion\main.bicepparam `
   -ImageTag 0.1.0
 ```
 
-The script expects `az`, private-network connectivity to the AKS API, and
-`kubectl`. It renders the checked-in manifest using Bicep outputs and applies
-it to the cluster.
+AKS workloads use `DefaultAzureCredential` for Event Hubs, Service Bus and
+ADLS; the ADX option also requires its database ingestor permission.
 
-## Verification
+## Verification and remaining work
 
-```powershell
-kubectl -n hie-medallion get deployments,pods,scaledobjects
-kubectl -n hie-medallion logs deployment/medallion-bronze
-kubectl -n hie-medallion logs deployment/medallion-silver
-kubectl -n hie-medallion logs deployment/medallion-gold
-```
+Run each service's Maven tests. PostgreSQL integration tests run only when
+`HIE_TEST_POSTGRES_URL`, `HIE_TEST_POSTGRES_USER`, and
+`HIE_TEST_POSTGRES_PASSWORD` point to an **isolated test database** with the
+schema applied. Never use a clinical database for tests.
 
-Send a JSON object to Event Hubs with application properties `eventId`,
-`source`, and `eventType`. Verify the corresponding blobs in Bronze and
-Silver and query:
+Before production, implement and validate:
 
-```kusto
-GoldEvent
-| where eventId == "<event-id>"
-| project eventId, source, eventType, eventTime, projectedTime, payload
-```
-
-## Production gaps
-
-Before clinical production use:
-
-- implement and validate the approved HL7/FHIR and terminology mapping;
-- use an outbox or reconciliation process for storage-to-Service-Bus atomicity;
-- add field-level PHI controls and approved retention policies;
-- prove ADX ingestion status and duplicate behavior under retries;
-- add KEDA and ADX load tests against peak and recovery targets;
-- formalize replay authorization, action suppression, and DLQ re-drive;
-- implement multi-region recovery objectives; and
-- complete clinical, security, privacy, architecture, and operations reviews.
+- separate Epic/USCDI deployment topology, PostgreSQL provisioning and Fabric
+  replication;
+- approved HL7/USCDI-to-FHIR mappings, validation and terminology;
+- ADLS Gold storage and a transactional outbox with Gold/action queue
+  publishers and consumers;
+- reconciliation of storage-to-queue handoffs, DLQ re-drive and replay;
+- connection pooling, secret rotation, availability, disaster recovery and
+  replication lag monitoring;
+- PHI controls, retention, authorization, load and failover testing; and
+- clinical, security, privacy, architecture and operations approvals.

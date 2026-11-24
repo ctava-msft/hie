@@ -2,14 +2,23 @@
 
 ## Purpose
 
-This document proposes an Azure-native replacement for the Microsoft Fabric
-Real-Time Intelligence, Eventstream, workspace, Eventhouse, and Activator
-implementation described by the HIE architecture.
+This document presents two Azure-native AKS options for the HIE real-time
+medallion architecture. **Approach 2 is the Changes-10 design**: independent
+internal Epic HL7 and external USCDI real-time pipelines use Java/Docker
+workloads on AKS, PostgreSQL Gold, HAPI FHIR, and downstream Fabric
+replication. The existing Fabric Clinical NRT Lakehouse remains in place.
 
-The target retains the existing logical boundaries:
+1. **Approach 1: AKS + ADLS + ADX** replaces the Fabric real-time data plane
+   with AKS processing, ADLS Gen2 Bronze/Silver storage, Service Bus stage
+   handoffs, and Azure Data Explorer as the KQL/Eventhouse serving layer.
+2. **Approach 2: AKS + PostgreSQL + Fabric replication** uses PostgreSQL as
+   the operational Gold store and replicates approved data into Fabric/OneLake
+   for governed analytical consumption. ADX is not required in this design.
+
+Both approaches retain the same source and medallion boundaries:
 
 ```text
-Epic / source systems
+Internal Epic HL7 or external USCDI / HIE sources
   -> Event Hubs
   -> AKS ingress and Bronze writer
   -> Bronze in Azure Data Lake Storage Gen2
@@ -18,23 +27,36 @@ Epic / source systems
   -> Silver in Azure Data Lake Storage Gen2
   -> Service Bus projection queue
   -> AKS Gold projector
-  -> Azure Data Explorer (Eventhouse equivalent)
-  -> dashboards, KQL, rules, FHIR/API services, and analytical consumers
+  -> Approach 1: Azure Data Explorer
+     or Approach 2: PostgreSQL operational state
+  -> Approach 2: AKS HAPI FHIR reads PostgreSQL
+  -> Approach 2: Fabric Mirroring/CDC -> OneLake replica
+     -> governed analytical consumers / Clinical NRT Lakehouse integration
+  -> dashboards, APIs, rules, actions, and analytical consumers
 ```
 
-The proposal is a replacement for Fabric's data plane, not a replacement for
-the source interface or consumer contracts. Existing AKS-hosted API services,
-API Management, Entra ID, monitoring, and downstream integrations can be
-retained or adapted.
+Approach 1 removes Fabric from the real-time data plane. Approach 2 retains
+Fabric as a read-only analytical replica and does not make Fabric the clinical
+write path. Existing AKS-hosted API services, API Management, Entra ID,
+monitoring, and downstream integrations can be retained or adapted in either
+option.
 
 ## Summary
 
 Use Azure Kubernetes Service (AKS) for custom ingestion, transformation,
 validation, projection, and operational processing. Place a durable queue
 between each independently recoverable processing stage. Store immutable raw
-events in Bronze, validated normalized records in Silver, and operational
-query projections in a KQL-compatible Azure Data Explorer (ADX) database that
-serves as the Eventhouse/Gold equivalent.
+events in Bronze and validated normalized records in Silver.
+
+In **Approach 1**, AKS materializes operational and event query projections
+into a KQL-compatible Azure Data Explorer (ADX) database that serves as the
+Eventhouse/Gold equivalent.
+
+In **Approach 2**, the Gold projector commits FHIR event and current-state
+projections to PostgreSQL. HAPI FHIR reads the operational database; approved
+PostgreSQL data is replicated to Fabric for analytical use. A transactional
+outbox and durable Gold/action delivery are required for downstream actions
+but are not implemented yet.
 
 The recommended messaging pattern uses:
 
@@ -52,6 +74,59 @@ Event Hubs for an Epic integration expected to sustain a very high event rate.
 Both are useful: Event Hubs buffers the incoming stream, while Service Bus
 coordinates recoverable processing steps.
 
+## Architecture Approaches
+
+| Dimension | Approach 1: AKS + ADLS + ADX | Approach 2: AKS + PostgreSQL + Fabric replication |
+|---|---|---|
+| Fabric role | No real-time data-plane dependency | Read-only mirrored analytical plane |
+| Bronze | ADLS Gen2 | ADLS Gen2, separate Epic and USCDI flows |
+| Silver | ADLS Gen2, versioned JSON/Delta | ADLS Gen2, versioned JSON/Delta |
+| Operational current state | ADX materialized/current-state views | Azure Database for PostgreSQL |
+| Event and time-series history | ADX | PostgreSQL event projection; ADLS lineage |
+| Transactional application reads | API service over approved ADX or read-model endpoint | Read-only HAPI FHIR and approved APIs over PostgreSQL |
+| Durable processing handoff | Service Bus | Service Bus |
+| Fabric copy | None | Read-only PostgreSQL replica in OneLake through Mirroring/CDC |
+| Best fit | Replacing Fabric real-time processing and KQL serving | Applications requiring PostgreSQL state while retaining Fabric analytics |
+| Additional operating concerns | ADX ingestion and reconciliation | PostgreSQL HA/PITR, WAL/CDC capacity, replication lag, and Fabric schema support |
+
+### Approach 1: AKS + ADLS + ADX
+
+The AKS Gold projector sends idempotent event projections to ADX. ADX serves
+KQL dashboards, operational event queries, rules, and governed API read
+models. ADLS Gen2 remains the durable Bronze and Silver source for replay and
+historical reconstruction.
+
+![AKS medallion architecture using ADLS and Azure Data Explorer](../hie-aks-medallion.drawio.png)
+
+### Approach 2: AKS + PostgreSQL + Fabric replication
+
+Changes-10 focuses on two independent, similarly structured pipelines:
+**HL7 internal - Epic RT** and **HL7 external - USCDI RT**. Each receives
+events through its Event Hub and uses AKS Bronze, Silver, and Gold Java
+containers, ADLS storage, and Service Bus handoffs. Gold commits PostgreSQL
+state; HAPI FHIR on AKS reads that PostgreSQL projection. Fabric receives a
+read-only copy via a supported mirroring/CDC mechanism. The Clinical NRT
+Lakehouse and its established downstream consumers remain in Fabric.
+
+![Changes-10: Epic and USCDI AKS real-time medallions with PostgreSQL and Fabric Clinical Lakehouse](../hie-Changes-10.drawio.png)
+
+The Gold event and current-state tables commit in one transaction. A future
+transactional outbox should reliably hand Gold/action messages to Service Bus;
+an outbox publisher, ADLS Gold write, action delivery and Fabric replication
+are not implemented by the Java service. Native Fabric Mirroring or an
+approved CDC/ADF adapter must be separately validated and deployed.
+
+The PostgreSQL database is authoritative for operational writes and
+transactional reads. Fabric contains a read-only replica for SQL, semantic,
+Power BI, and AI/agent analytics. Consumers must not write through the Fabric
+copy.
+
+The earlier detailed diagram below is an alternative illustration, not the
+exact Changes-10 topology; it includes ADX and an outbox that are not
+dependencies of the simplified design.
+
+![AKS medallion architecture with PostgreSQL replicated into Fabric](../hie-aks-medallion-AKS%20%2B%20PostgreSQL%20%2B%20Fabric%20Replication.drawio.png)
+
 ## Service Mapping
 
 | Fabric capability | Proposed Azure-native equivalent | Notes |
@@ -62,15 +137,18 @@ coordinates recoverable processing steps.
 | Bronze/Silver orchestration | Service Bus topics or queues | Durable stage handoffs with dead-lettering and independently scaled consumers. |
 | Fabric transformation | AKS normalization services | Decode, parse, validate, map terminology, and publish normalized records. |
 | Silver Eventhouse | ADLS Gen2 normalized zone, preferably Delta Lake | Versioned, queryable, idempotently materialized normalized data. |
-| Eventhouse / Gold | Azure Data Explorer | Near-real-time KQL, dashboards, retention, and time-series or event analytics. |
+| Eventhouse / Gold | ADX in Approach 1; PostgreSQL operational state and event projections in Approach 2 | ADX is not a dependency of the Changes-10 design. |
+| Operational system of record | No separate transactional store in Approach 1 | Azure Database for PostgreSQL in Approach 2. |
 | Real-Time Dashboard | Azure Data Explorer Dashboards or Azure Managed Grafana | Select based on audience and operating model. |
 | Activator | AKS rule processor, Azure Functions, or Azure Stream Analytics where appropriate | Service Bus carries resulting actions durably to approved delivery systems. |
 | Fabric notebook/materialization | AKS Data API jobs, Databricks, or scheduled Delta jobs | Choose only if durable batch or complex historical transformation is required. |
-| Fabric Lakehouse / OneLake | ADLS Gen2 plus Delta Lake | Analytical data remains in Azure storage under the organization's control. |
-| Power BI semantic layer | Power BI over ADX and/or ADLS/Delta | Preserve governed semantic models and row/object-level security. |
-| APIM and HAPI FHIR | APIM and AKS services | Retain the current consumer boundary; query ADX or another approved read model. |
+| Fabric Lakehouse / OneLake | ADLS/Delta in Approach 1; Fabric mirrored PostgreSQL plus optional governed transformations in Approach 2 | Approach 2 treats the Fabric copy as a downstream read-only analytical replica. |
+| Power BI semantic layer | Power BI over ADX/ADLS in Approach 1; Power BI over the mirrored Fabric model in Approach 2 | Preserve governed semantic models and row/object-level security. |
+| APIM and HAPI FHIR | APIM and AKS services | The existing HAPI server supports Fabric Eventhouse or PostgreSQL Gold; an ADX HAPI backend is not implemented. |
 
-## Logical Architecture
+## Detailed Data Flows
+
+### Approach 1: AKS + ADLS + ADX
 
 ```text
                               Azure Monitor / Log Analytics
@@ -135,6 +213,44 @@ Epic / interface engines ----------+ |
    KQL dashboards   AKS APIs -> APIM
 ```
 
+### Approach 2: AKS + PostgreSQL + Fabric replication
+
+```text
+Epic HL7 -> Epic Event Hub ----+
+                               +-> AKS Bronze -> ADLS Bronze -> Service Bus
+USCDI/HIE -> USCDI Event Hub --+   -> AKS Silver -> ADLS Silver -> Service Bus
+                                   -> AKS Gold -> PostgreSQL event + current state
+                                        |               |
+                                        |               +-> AKS HAPI FHIR -> APIM
+                                        +-> ADLS Gold and Service Bus Gold/actions (planned)
+                                                        |
+PostgreSQL -> Fabric Mirroring/CDC (planned) -> OneLake replica
+           -> existing Clinical NRT Lakehouse / governed analytical consumers
+```
+
+The two lines represent **separate logical pipelines**, not one merged Event
+Hub or queue. Choose separate databases or define tenant/source isolation and
+collision-free FHIR IDs before sharing a database. Fabric replication is
+asynchronous and does not change PostgreSQL ownership. The Fabric replica is
+not an application write target. Transactional state and an action outbox must
+eventually commit together; neither an outbox nor the replicator is implemented.
+
+### Implementation status
+
+The existing Java image defaults to the original ADX Gold backend. Setting
+`GOLD_BACKEND=postgresql` on the Gold role writes an event and current FHIR
+resource to PostgreSQL in one transaction. `GOLD_STORE=postgresql` selects the
+PostgreSQL-backed, **read-only** HAPI `RestfulServer`; the existing Eventhouse
+backend remains the default. This is a custom projection, not HAPI JPA storage.
+Schema, configuration, contract and deployment gaps are described in the
+[AKS service README](../services/aks-medallion/README.md).
+
+HL7/USCDI parsing, approved FHIR mappings and validation, ADLS Gold, a
+transactional outbox/Gold queue publisher, action delivery, PostgreSQL
+provisioning and Fabric replication are **not implemented**. The existing
+Bicep and deployment script still provision the original ADX design and do
+not deploy the Changes-10 PostgreSQL/Fabric topology.
+
 ## Component Responsibilities
 
 ### Azure Event Hubs
@@ -181,8 +297,9 @@ Recommended entities are:
 
 1. `bronze-ready`: normalize committed raw events.
 2. `silver-ready`: project committed normalized records and evaluate rules.
-3. `actions`: deliver approved alerts or workflow actions.
-4. One dead-letter queue for each work entity's failed messages.
+3. `gold-ready`: publish committed Gold work (planned).
+4. `actions`: deliver approved alerts or workflow actions (planned).
+5. One dead-letter queue for each work entity's failed messages.
 
 Use topics when more than one independent subscriber needs the same stage
 event. Use queues when a stage has one consumer group. Enable duplicate
@@ -247,28 +364,78 @@ single generic retention value without data-governance approval.
 
 ### AKS Gold Projector
 
-The Gold projector materializes the approved operational projections into ADX.
-Examples include patient, encounter, observation, event status, data-quality,
-and monitoring views. It:
+The Gold projector materializes approved operational projections. Examples
+include patient, encounter, observation, event status, data-quality, and
+monitoring views. It:
 
 - reads only committed Silver records;
 - applies versioned business and clinical projection rules;
-- maintains a stable ADX event ID for idempotent ingestion;
-- writes updates as append-only event records unless a use case explicitly
-  requires state materialization;
+- in Approach 1, writes append-only events and approved current-state
+  projections to ADX;
+- in Approach 2, transactionally writes an FHIR event and current-state
+  projection to PostgreSQL; an action outbox is a future requirement;
+- maintains a stable event ID for idempotent effects across ADX, PostgreSQL,
+  Service Bus, and API consumers;
 - publishes rule/action candidates to a durable action path; and
 - exposes checkpoint, lag, and projection-failure metrics.
 
-ADX can ingest through queued ingestion, an SDK, Event Hubs, or a broker
-adapter. For this design, the AKS projector should own projection semantics
-and use ADX queued ingestion for resilient, batched writes. ADX ingestion
-success is not the same as message processing success; the projector needs a
-tracked ingestion operation or a reconciliation mechanism.
+For Approach 2, do not update PostgreSQL and publish the corresponding action
+as two independent writes. Implement and commit an outbox intent in the same
+PostgreSQL transaction, then use a retryable publisher to deliver to Service
+Bus. This action path is not yet implemented.
+
+### Azure Database for PostgreSQL: Approach 2
+
+Azure Database for PostgreSQL Flexible Server is the operational source of
+truth for the AKS application in Approach 2. It provides:
+
+- transactional current-state tables for approved clinical and event entities;
+- event history and current-state records in one transaction;
+- a future transactional outbox for downstream action publication;
+- primary/unique constraints and indexes supporting idempotent FHIR/API reads;
+- zone-redundant high availability where the region and SKU support it;
+- point-in-time recovery, backups, encryption, private networking, and
+  managed-identity access where supported by the client design; and
+- a bounded, approved schema eligible for Fabric replication.
+
+PostgreSQL design must account for connection pooling, schema migration,
+partitioning, retention, vacuum/autovacuum, HA failover behavior, and database
+backup/recovery. Bronze and Silver in ADLS remain the replayable source; do not
+make PostgreSQL the only retained copy of the source event.
+
+The HAPI layer queries the current PostgreSQL FHIR projection through a
+read-only database identity. It does not expose unrestricted SQL access or
+write directly to HAPI JPA tables.
+
+### Fabric Mirroring and CDC Replication: Approach 2
+
+Fabric is downstream of PostgreSQL in Approach 2. Use a supported native
+Fabric Mirroring capability when available for Azure Database for PostgreSQL;
+otherwise deploy an approved CDC/ADF or equivalent adapter.
+
+The replication path must:
+
+- replicate only approved tables or views;
+- retain PostgreSQL as the sole operational write system;
+- monitor replication lag, failures, schema drift, and restart position;
+- preserve a resumable change cursor or replication slot;
+- protect credentials and connectivity with Entra, private networking, and
+  least-privilege permissions;
+- validate supported data types, keys, DDL, row counts, and delete behavior;
+- control logical-replication/WAL retention to avoid storage growth; and
+- define the consequence of replication lag for analytical consumers.
+
+The resulting Fabric mirrored database is a read-only operational copy in
+OneLake. Warehouse/Lakehouse transformations, semantic models, Power BI,
+data agents, and approved AI experiences consume the replica according to
+Fabric governance. They must not be represented as synchronous clinical
+write-back paths.
 
 ### Azure Data Explorer: Eventhouse Equivalent
 
-ADX replaces Fabric Eventhouse for KQL-based operational and event analytics.
-The ADX database contains:
+In Approach 1, ADX replaces Fabric Eventhouse for KQL-based operational and
+event analytics. ADX is not required for the simplified Changes-10 Approach 2.
+The Approach 1 ADX database contains:
 
 - append-only canonical event tables;
 - functions or materialized views for current-state projections;
@@ -282,9 +449,10 @@ Use update policies only for deterministic, low-cost projections. Put complex
 or versioned business transformation in the AKS Gold projector so behavior is
 testable in application code and can be rolled back independently.
 
-ADX is the Eventhouse-equivalent serving layer, not a general clinical system
-of record. Access should be mediated for external applications by an API
-service and API Management rather than granting broad direct ADX permissions.
+ADX is an event and operational analytics serving layer, not a general
+clinical system of record. Access should be mediated for external applications
+by an API service and API Management rather than granting broad direct ADX
+permissions.
 
 ### AKS Rule and Action Processing
 
@@ -309,7 +477,10 @@ Recommended AKS workloads:
 
 - `bronze-ingest`: Event Hubs consumer and raw writer;
 - `normalizer`: Bronze-to-Silver worker;
-- `gold-projector`: Silver-to-ADX worker;
+- `gold-projector`: Silver-to-ADX worker in Approach 1, or
+  Silver-to-PostgreSQL worker in Approach 2;
+- `outbox-publisher`: planned Approach 2 publisher for durable Service Bus
+  action delivery;
 - `rule-evaluator`: approved detections, if not implemented in another engine;
 - `action-worker`: Service Bus action consumer;
 - `reconciler`: cross-stage counts and replay orchestration; and
@@ -337,7 +508,8 @@ Apply:
 - backpressure when ADLS, ADX, Service Bus, or a downstream API is throttled.
 
 Autoscaling does not replace load testing. Maximum service bus concurrency,
-Event Hubs partition count, ADLS write patterns, ADX ingestion capacity, and
+Event Hubs partition count, ADLS write patterns, ADX ingestion capacity,
+Approach 2 PostgreSQL connections/WAL, Fabric replication capacity, and
 downstream limits should be sized from measured peak rate and recovery
 requirements.
 
@@ -370,6 +542,13 @@ pattern is a durable stage record plus an outbox or equivalent publisher. A
 background publisher retries unsent records, and a reconciler detects gaps
 between stored records and enqueued work.
 
+In Approach 2, the implemented PostgreSQL event and current-state changes
+share one transaction. A future local outbox **must** share that transaction
+when actions are added. Delivery to Service Bus or another downstream remains
+at least once and requires stable identities and idempotent consumers. Fabric
+replication is an independent read-only projection, not part of the clinical
+write transaction.
+
 ## Failure Handling
 
 | Failure | Expected behavior |
@@ -381,18 +560,25 @@ between stored records and enqueued work.
 | Service Bus publish fails after storage commit | Outbox/publisher retries or reconciler republishes the committed stage event. |
 | ADX throttles | Retry according to ingestion status and back off; do not create duplicate Gold effects. |
 | ADX unavailable | Queue/checkpoint remains pending; calculate backlog and recovery time before scaling. |
+| PostgreSQL write fails | Roll back event and current state; retry with the same event identity. |
+| PostgreSQL outbox publisher fails | Retain the committed outbox row and retry; do not create a second state effect. |
+| Fabric replication stops or falls behind | Continue PostgreSQL operations, alert on lag, preserve the replication cursor/WAL safely, and repair the analytical copy without replaying writes into PostgreSQL. |
 | Downstream action fails | Retry only approved transient failures; dead-letter permanent or policy-related failures. |
 | Malformed or unsupported payload | Keep raw Bronze lineage, route to quarantine, and alert on volume or trend. |
 
 ## Security Architecture
 
-- Use Microsoft Entra workload identity for AKS; do not deploy service
-  principal secrets or Service Bus/Event Hubs connection strings.
+- Use Microsoft Entra workload identity for AKS broker/storage access; do not
+  deploy service principal secrets or Service Bus/Event Hubs connection
+  strings. The current PostgreSQL clients require a database password from an
+  approved secret mechanism; Entra token authentication is future work.
 - Grant each workload only the role it needs for its Event Hubs entity, storage
-  container/path, Service Bus entity, and ADX database/table.
+  container/path, Service Bus entity, PostgreSQL database/schema, ADX
+  database/table, and Fabric item.
 - Use private endpoints and private DNS for storage, Service Bus, Event Hubs,
-  ADX, Key Vault, Container Registry, and AKS API access where the selected
-  service and network topology require them.
+  PostgreSQL, ADX, applicable Fabric connectors/gateways, Key Vault, Container
+  Registry, and AKS API access where the selected service and network topology
+  require them.
 - Disable local authentication for broker and storage resources unless a
   documented exception requires it.
 - Use Azure Key Vault with workload identity only for configuration that cannot
@@ -406,6 +592,9 @@ between stored records and enqueued work.
   and after validating service compatibility and operations.
 - Separate operators, deployers, replay authorities, clinical data readers,
   and audit readers with Entra groups and Azure RBAC.
+- In Approach 2, use a dedicated replication identity with read/CDC rights and
+  no clinical write permission. Fabric consumers receive read access to the
+  mirrored/curated scope, never PostgreSQL write roles.
 
 ## Observability and Operations
 
@@ -417,7 +606,9 @@ PHI in telemetry:
 - queue enqueue and receive times;
 - normalization and mapping version;
 - Silver commit time;
-- ADX ingestion operation and event commit time;
+- Approach 1 ADX ingestion operation and event commit time;
+- Approach 2 PostgreSQL event/current-state commit identifier and, when implemented, outbox status;
+- Approach 2 Fabric replication checkpoint and observed lag;
 - action enqueue, delivery, retry, and terminal outcome; and
 - workload release version and replica identity where useful.
 
@@ -428,7 +619,11 @@ Required operational measures include:
 - Service Bus active/dead-letter counts and delivery attempts;
 - parse, validation, quarantine, and mapping failure rates;
 - Bronze/Silver/Gold counts by reconciliation window;
-- ADX ingestion latency, failures, throttling, query latency, and health;
+- Approach 1 ADX ingestion latency, failures, throttling, query latency, and health;
+- Approach 2 PostgreSQL connection saturation, transaction latency, deadlocks,
+  WAL/replication-slot growth, failover, and backup/PITR health;
+- Fabric Mirroring/CDC lag, cursor state, schema failures, rejected tables, and
+  reconciliation counts for Approach 2;
 - AKS restarts, saturation, pod readiness, and KEDA scaling events;
 - FHIR/API latency, error rate, and authorization denials; and
 - rule evaluation, action delivery, suppression, and operator action audit.
@@ -445,6 +640,8 @@ Recommended options include:
 - Service Bus namespace replication or a documented cutover mechanism;
 - ADLS geo-redundant storage and an approved second-region recovery process;
 - a second ADX cluster/database strategy based on RTO/RPO and cost;
+- Approach 2 zone-redundant PostgreSQL and tested backup/restore, failover, and
+  replication-cursor recovery;
 - AKS deployed with availability zones and a separate recovery cluster
   definition; and
 - immutable Bronze retention as the reconstruction source.
@@ -463,6 +660,9 @@ The major cost drivers are:
 - Service Bus premium capacity and message operations;
 - ADLS capacity, transactions, lifecycle tiering, and transfer;
 - ADX compute and storage SKU, cache, and ingestion;
+- Approach 2 PostgreSQL compute, high availability, storage, backup, and I/O;
+- Approach 2 Fabric capacity, Mirroring/CDC operations, connectivity, and
+  OneLake storage;
 - Log Analytics ingestion and retention;
 - private endpoints, NAT/firewall egress, and network transfer; and
 - API Management and monitoring services.
@@ -478,9 +678,10 @@ accepted, but the production decision must be explicit.
 |---|---|
 | Shared platform | networking, private DNS, AKS, ACR, Key Vault, monitoring, policy |
 | Ingress | Event Hubs, source identities, capture/checkpoint resources |
-| Data platform | ADLS Bronze/Silver, ADX, lifecycle and data permissions |
+| Data platform | ADLS Bronze/Silver/Gold, selected ADX or PostgreSQL Gold, Fabric mirrored data where selected, lifecycle and data permissions |
 | Processing | Service Bus, AKS workloads, KEDA, deployment identities |
 | Serving | HAPI FHIR/API adapters, APIM, dashboards, consumer identities |
+| Replication (Approach 2) | Fabric Mirroring/CDC adapter, replication identity, lag monitoring, and read-only governance |
 | Operations | alerts, runbooks, reconciliation reports, replay governance |
 
 Use separate subscriptions or resource groups only where isolation, billing,
@@ -510,27 +711,45 @@ one resource group per logical service without a management reason.
 - Run AKS normalization and the Gold projector in parallel with Fabric.
 - Reconcile record counts, values, validation outcomes, and current-state
   projections.
-- Validate every ADX KQL consumer against the new schemas and functions.
+- For Approach 1, validate every ADX KQL consumer against the new schemas and
+  functions.
+- For Approach 2, validate PostgreSQL event and current state, eventual
+  transactional outbox delivery, and the Fabric mirror as distinct
+  consistency checkpoints.
 - Build quarantine, dead-letter, replay, and rollback runbooks.
 
 ### Phase 3: Consumer cutover
 
-- Move dashboards to ADX or Managed Grafana after query acceptance.
-- Cut API and HAPI read paths to the approved Azure read model through APIM.
+- Move event dashboards to the selected approved backend or Managed Grafana
+  after query acceptance.
+- For Approach 2, move current-state API/HAPI reads to PostgreSQL and expose
+  replicated Fabric data only to approved analytical consumers.
+- Cut API and HAPI read paths to the selected approved read model through APIM.
 - Migrate rule/action paths with delivery disabled, then enable by approved
   rule cohort.
 - Run rollback-capable dual reads and compare query results during a bounded
   observation window.
 
-### Phase 4: Fabric retirement
+### Phase 4A: Fabric real-time retirement
 
 - Stop Fabric producers only after reconciliation and consumer acceptance.
 - Retain source and transformed data for the approved transition period.
-- Remove Fabric identities, gateways, capacities, and workspaces using a
-  dependency-verified retirement checklist.
+- For Approach 1, remove Fabric identities, gateways, capacities, and
+  workspaces using a dependency-verified retirement checklist.
+- For Approach 2, retire Eventstream/Eventhouse real-time processing but retain
+  the explicitly approved Fabric Mirroring, Lakehouse/Warehouse, and consumer
+  boundary.
 - Preserve evidence for clinical, security, and operational sign-off.
 
-## POC Acceptance Criteria
+### Phase 4B: Fabric replication steady state
+
+For Approach 2, retain only the approved Fabric analytical boundary. Establish
+owners for mirrored tables, replication health, schema evolution, semantic
+models, capacity, and consumer access. Disable any remaining Fabric real-time
+write or event-processing path unless it is explicitly retained by architecture
+decision.
+
+## Acceptance Criteria
 
 1. **Losslessness:** Bronze payload hashes match the source stream; metadata
    permits deterministic replay.
@@ -541,10 +760,11 @@ one resource group per logical service without a management reason.
 4. **Poison handling:** malformed data is preserved, quarantined, visible, and
    does not block healthy events.
 5. **Recovery:** backlog recovery meets the agreed throughput and lag target.
-6. **Freshness:** p50/p95 source-to-ADX and source-to-API latency meet the
-   approved SLOs.
-7. **Compatibility:** representative KQL queries and consumers produce expected
-   results against ADX.
+6. **Freshness:** p50/p95 source-to-Gold/source-to-API latency, plus
+   PostgreSQL-to-Fabric lag for Approach 2, meet the approved SLOs.
+7. **Compatibility:** Approach 1 KQL queries and consumers produce expected
+   results against ADX; Approach 2 PostgreSQL and mirrored Fabric row/state
+   counts agree for approved windows.
 8. **Security:** unauthorized identities cannot read raw payloads, publish to
    broker entities, query clinical projections, or invoke replay.
 9. **Operations:** dashboards, alerts, owners, dead-letter re-drive steps, and
@@ -559,23 +779,28 @@ The following decisions should be made before implementation:
 1. **Stream versus queue boundary:** validate whether Event Hubs receives all
    external events or whether selected sources can publish directly to
    Service Bus.
-2. **Silver format:** choose Delta Lake when merge/schema/history requirements
+2. **AKS operating model:** select Approach 1 (ADLS + ADX) or Approach 2
+   (PostgreSQL + Fabric replication) for operational Gold/current state.
+3. **Silver format:** choose Delta Lake when merge/schema/history requirements
    justify a runtime dependency; otherwise use versioned Parquet/JSON plus a
    catalog.
-3. **Gold engine:** confirm ADX as the Eventhouse replacement and define required
-   dashboards, retention, cache, and query concurrency.
-4. **State model:** define append-only event projections versus updateable
+4. **Gold state model:** define the ADX serving model for Approach 1 and
+   the PostgreSQL table/outbox model for Approach 2.
+5. **Replication mechanism:** confirm supported Fabric Mirroring for the
+   selected PostgreSQL service/tier/region, or approve a CDC/ADF adapter and
+   its operational ownership.
+6. **State semantics:** define append-only event projections versus updateable
    current-state records.
-5. **Ordering:** identify workflows requiring per-key order and the associated
+7. **Ordering:** identify workflows requiring per-key order and the associated
    throughput trade-off of Service Bus sessions.
-6. **Rule engine:** use an AKS service, Azure Functions, Azure Stream Analytics,
+8. **Rule engine:** use an AKS service, Azure Functions, Azure Stream Analytics,
    or an approved external rules platform based on complexity and ownership.
-7. **Retention and privacy:** approve Bronze, Silver, queue, log, ADX, and
-   dead-letter retention.
-8. **Availability:** establish RTO/RPO and the multi-region recovery strategy.
-9. **Replay authority:** define who may replay which windows and how actions are
+9. **Retention and privacy:** approve Bronze, Silver, queue, log, ADX,
+   PostgreSQL, Fabric mirror, backup, and dead-letter retention.
+10. **Availability:** establish RTO/RPO and the multi-region recovery strategy.
+11. **Replay authority:** define who may replay which windows and how actions are
    suppressed or deduplicated during replay.
-10. **Existing consumers:** inventory every direct KQL, Power BI, notebook,
+12. **Existing consumers:** inventory every direct KQL, Power BI, notebook,
     Activator, API, or OneLake dependency before removing Fabric.
 
 ## Platform Comparison
@@ -583,7 +808,7 @@ The following decisions should be made before implementation:
 | Dimension | AKS-based real time | Microsoft Fabric Real-Time Intelligence | Azure Databricks real time / Lakeflow |
 |---|---|---|---|
 | **Best fit** | Custom, high-control streaming and integration workloads | Fast delivery of operational real-time analytics with minimal platform management | Lakehouse-centric ingestion, transformation, machine learning, and analytics |
-| **Architecture** | Event Hubs + AKS/KEDA + Service Bus + ADLS + ADX | Event Hubs + Eventstream + Eventhouse + Activator + OneLake | Kafka/Event Hubs + Structured Streaming/Lakeflow + Delta Lake + SQL Warehouse |
+| **Architecture** | Event Hubs + AKS/KEDA + Service Bus + ADLS; ADX or PostgreSQL Gold with Fabric replica | Event Hubs + Eventstream + Eventhouse + Activator + OneLake | Kafka/Event Hubs + Structured Streaming/Lakeflow + Delta Lake + SQL Warehouse |
 | **Primary strength** | Maximum flexibility and portability | Low-code, integrated real-time experience | Unified batch, streaming, Delta, governance, and data engineering |
 | **Pros** | Full control over parsers, retries, ordering, APIs, and replay; any language or framework; KEDA scaling; clear stage boundaries; reusable AKS skills | Rapid implementation; managed Eventstream, KQL Eventhouse, dashboards, and Activator; strong Power BI/OneLake integration; less infrastructure management | Mature streaming transformations; strong exactly-once Delta writes; ACID Bronze/Silver/Gold lakehouse; batch/stream convergence; notebooks, Lakeflow, Unity Catalog, ML, and quality controls |
 | **Cons** | Highest operational burden; container, broker, cluster, networking, security, SRE, and upgrade ownership; idempotency and recovery must be engineered; larger deployment and testing surface | Proprietary deployment model; less control over internal processing and recovery; capacity economics and throttling; specialized permissions and API automation; Eventhouse is not a transactional store; Activator is not a complete durable delivery engine | Spark and streaming expertise required; cluster/job tuning remains; Event Hubs or Service Bus may still be needed; less natural for low-latency application APIs or durable work queues; continuous compute can be costly |
@@ -597,7 +822,7 @@ The following decisions should be made before implementation:
 | **Governance** | Azure RBAC, Entra, network controls, Key Vault, ADLS, and custom lineage | Centralized through Fabric workspaces, OneLake, and tenant administration | Strong Unity Catalog, Delta lineage, access policies, and audit |
 | **Engineering skills** | Kubernetes, messaging, ADX, ADLS, application development, and SRE | KQL, Fabric, Eventstream, Power BI, and workspace administration | Spark, Python/Scala/SQL, Delta Lake, Databricks workflows, and Unity Catalog |
 | **Portability / exit strategy** | High at the application layer; Azure managed-service dependencies remain | Lower; workload definitions and data-plane behavior are Fabric-specific | Moderate; Spark and Delta are portable, while Databricks tooling remains platform-specific |
-| **Cost profile** | AKS, Event Hubs, Service Bus, ADLS, ADX, monitoring, and APIM; combined fixed and variable costs | Fabric capacity plus supporting Azure ingress/services; efficient when capacity is well utilized | Databricks DBUs, compute, storage, and Azure services; continuous streaming compute can be expensive |
+| **Cost profile** | AKS, Event Hubs, Service Bus, ADLS, selected ADX or PostgreSQL/Fabric, monitoring, and APIM | Fabric capacity plus supporting Azure ingress/services; efficient when capacity is well utilized | Databricks DBUs, compute, storage, and Azure services; continuous streaming compute can be expensive |
 | **Healthcare / PHI controls** | Strong control over networking, identity, logging, and processing boundaries, but more controls must be implemented and maintained | Strong platform controls; regional, private-access, tenant, and capacity requirements must be validated | Strong governance and identity controls; notebook, job, log, and private-connectivity behavior must be validated for PHI |
 | **Key failure modes** | Pod eviction, checkpoint loss, duplicate processing, broker throttling, DLQ, partial ADLS commits, and ADX ingestion failure | Capacity throttling, update-policy failures, tenant permissions, workspace dependencies, and action delivery limits | Checkpoint mismatch, schema drift, small files, cluster restart, streaming lag, and downstream serving limitations |
 
@@ -630,18 +855,31 @@ real-time processing and durable integration behavior are the dominant needs.
 
 ## Recommendation
 
-Proceed with a focused POC using:
+Retain the common AKS ingress and processing platform:
 
 - Event Hubs for source ingress;
 - Service Bus topics and dead-letter queues for durable stage handoffs;
-- KEDA-scaled AKS consumers for Bronze ingestion, normalization, projection, and
-  actions;
-- ADLS Gen2 for immutable Bronze and versioned Silver;
-- ADX for the Eventhouse/Gold KQL serving layer; and
+- KEDA-scaled AKS consumers for Bronze ingestion, normalization, projection,
+  and actions;
+- ADLS Gen2 for immutable Bronze and versioned Silver/Gold; and
 - APIM in front of AKS-hosted read and FHIR API services.
 
-This preserves the useful medallion semantics while making application
+Select the Gold and analytical path according to the operating requirement:
+
+- **Approach 1** is preferred when the objective is full replacement of the
+  Fabric real-time data plane and ADX current-state projections satisfy the API
+  and transactional-read requirements.
+- **Approach 2** is the Changes-10 direction: Epic and USCDI AKS pipelines
+  project to PostgreSQL, AKS HAPI FHIR reads PostgreSQL, and Fabric retains its
+  Clinical NRT Lakehouse and read-only analytical copy.
+
+For Approach 2, PostgreSQL must be the operational source of truth. Fabric
+Mirroring/CDC produces a read-only downstream replica and must not introduce a
+second write path. Validate native PostgreSQL mirroring support in the target
+Fabric region and tenant; otherwise implement the approved CDC/ADF adapter.
+
+Both approaches preserve medallion semantics while making application
 behavior, queue ownership, replay, deployment, and operations explicit in
-Azure. Fabric features should be removed only after data equivalence,
-consumer compatibility, reliability, and governance controls have been proven
-in parallel operation.
+Azure. Fabric real-time components should be removed only after data
+equivalence, consumer compatibility, reliability, security, and governance
+controls have been proven in parallel operation.

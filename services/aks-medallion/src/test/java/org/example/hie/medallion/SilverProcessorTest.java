@@ -35,7 +35,7 @@ class SilverProcessorTest {
     private static MedallionProperties properties() {
         return new MedallionProperties("silver", "eventhub.example", "events", "group",
                 "servicebus.example", "bronze-ready", "silver-ready", "https://storage.example",
-                "bronze", "silver", "checkpoints", "quarantine", "", "hie_gold",
+                "bronze", "silver", "checkpoints", "quarantine", "adx", "", "hie_gold",
                 "GoldEvent", 1024, 1);
     }
 }
