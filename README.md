@@ -1,197 +1,159 @@
 # HIE Solution Architecture
 
-Microsoft Fabric Real-Time Intelligence, Eventhouse, OneLake, semantic interoperability, and governed API access.
+The current architecture direction is the **Changes-10 AKS real-time
+medallion**: separate AKS pipelines for internal Epic HL7 and external USCDI
+events, with PostgreSQL-backed Gold and the existing Fabric Clinical NRT
+Lakehouse retained for analytics.
 
-**Implemented FHIR access:** [HAPI FHIR over Gold Eventhouse](./docs/fhir-gold-poc.md)
-documents the repurposed [Terraform deployment](./terraform), the containerized
-read-only HAPI R4 adapter, Gold Eventstream ingestion, and five synthetic ePNA
-lifecycle [Bundles and event files](./samples/epna). In that Fabric option Gold
-remains authoritative; no HAPI JPA, SQL, Cosmos or second clinical repository
-is introduced there. The separate AKS PostgreSQL option uses a custom,
-read-only FHIR projection; the AKS pipeline also has an opt-in HAPI JPA
-integration that requires separately provisioned servers.
+![Changes-10: AKS Epic and USCDI real-time medallions, PostgreSQL, and Fabric Clinical Lakehouse](./hie-Changes-10.drawio.png)
 
-**Imported Activator delivery service:** [Java 21 / Spring Boot service](./services/fabric-rt-actuator)
-provides webhook intake, durable Service Bus delivery to a downstream API, and
-editing of an existing Activator temperature rule. Power Automate custom-action
-intake includes a connector definition and standalone API Management Bicep;
-Java's Fabric management and downstream API calls remain direct. See
-[Epic ADT integration and setup](./docs/adt-activator.md) for import provenance,
-deployment boundaries, and the admission/discharge-driven patient rule management
-that is **not yet implemented**.
+*Changes-10: latest architecture direction.*
 
-**AKS medallion implementation:** [Java AKS real-time pipeline](./services/aks-medallion)
-provides role-specific Bronze, Silver, and Gold workloads, durable Service Bus
-stage handoffs, ADLS Gen2 persistence, and selectable ADX or PostgreSQL Gold.
-The existing Bicep and Kubernetes deployment target ADX. The PostgreSQL/Fabric
-deployment, clinical HL7/FHIR mapping, HAPI JPA production controls, and
-replication remain future work.
+The Changes-10 flow uses independent Azure Event Hubs for Epic and USCDI,
+AKS-hosted Java workers, ADLS Gen2 Bronze/Silver, Service Bus stage handoffs,
+and PostgreSQL Gold. HAPI FHIR provides FHIR access, with an opt-in JPA
+integration for Gold writes and Silver patient matching. PostgreSQL-to-Fabric
+replication is the target analytical flow; the existing Clinical NRT Lakehouse
+remains part of the architecture.
+
+See the [AKS architecture](./docs/azure-aks-medallion-architecture.md) and
+[service guide](./services/aks-medallion/README.md) for implementation details.
+
+## Related POCs
+
+- [HAPI FHIR over Gold Eventhouse](./docs/fhir-gold-poc.md): an alternative
+  Fabric-based FHIR access path, with its repurposed [Terraform
+  deployment](./terraform), read-only HAPI R4 adapter, and synthetic ePNA
+  lifecycle [Bundles and event files](./samples/epna).
+- [Activator delivery service](./services/fabric-rt-actuator): Java/Spring
+  webhook intake, durable Service Bus delivery, and Activator rule management.
+  See [Epic ADT integration and setup](./docs/adt-activator.md) for scope and
+  deployment boundaries.
 
 | Document information | Value |
 |---|---|
-| Architecture status | Approved architecture |
-| Document type | Solution architecture document |
-| Prepared for | HIE Program |
-| Prepared by | Chris Tava |
-| Date | 19 November 2026 |
+| Architecture status | POC architecture direction |
+| Document type | Solution architecture |
+| Date | 24 November 2026 |
 
 ## Architecture Statement
 
-This document establishes the shared architecture for the HIE program and
-presents two real-time implementation options. **Option 1: Fabric
-RT** is the approved Fabric-based baseline for Eventstream, Eventhouse, and
-OneLake. **Option 2: AKS RT Medallion** is an Azure-native implementation using
-AKS, Service Bus, ADLS Gen2, and either Azure Data Explorer or PostgreSQL.
-Changes-10 focuses on PostgreSQL, HAPI FHIR, and Fabric analytical replication
-while retaining the Clinical NRT Lakehouse. Both options retain governed
-ingress, FHIR, API, analytical, and operational consumption boundaries.
+This document focuses on the Changes-10 AKS real-time direction for internal
+Epic HL7 and external USCDI. The design uses PostgreSQL as operational Gold,
+HAPI FHIR for resource access and JPA processing, and Fabric for analytical
+replication while retaining the Clinical NRT Lakehouse. Earlier Fabric RT
+and AKS/ADX designs remain alternatives and are identified as such.
 
 ## 1. Executive Summary
 
-Option 1 uses Microsoft Fabric Real-Time Intelligence as the primary real-time
-ingestion, transformation, persistence, and operational analytics platform for
-HIE events. Azure Event Hubs remains the external event ingress. Fabric
-Eventstream consumes the HL7 Base64 event stream and writes the original
-representation to Bronze Eventhouse. Fabric processing decodes Base64, parses
-HL7, and maps the data to HL7 JSON and a USCDI+ aligned Silver structure.
-Eventhouse update policies and governed transformation logic promote curated
-row-and-column structures into Gold Eventhouse.
+Separate AKS pipelines handle internal Epic HL7 and external USCDI events.
+Event Hubs provide ingress, Java workers persist raw and normalized records in
+ADLS Gen2, and Service Bus provides durable stage handoffs. Gold commits event
+history and current FHIR state to PostgreSQL. HAPI FHIR provides resource
+access; the opt-in HAPI JPA path supports Gold synchronization, exact
+enterprise-identifier MDM matching in Silver, and FHIR subscriptions relayed
+to Service Bus.
 
-The architecture separates operational real-time consumption from durable analytical and integration consumption. Gold Eventhouse directly supports KQL queries, Real-Time Dashboards, and Activator. A Fabric notebook materializes curated data into Lakehouse and OneLake for Power BI, semantic models, ontologies, data agents, and governed APIs. An AKS-hosted HAPI FHIR service provides a standards-based FHIR access path. Azure API Management provides the managed external access boundary for approved application, Copilot, and AI clients.
-
-Option 2 uses AKS-hosted Java workloads for Bronze ingestion, Silver
-normalization, and Gold projection. Service Bus provides durable stage
-handoffs and dead-letter handling, ADLS Gen2 provides the Bronze and Silver
-stores. Gold can use Azure Data Explorer or, in the Changes-10 direction,
-PostgreSQL with HAPI FHIR and a planned Fabric replica. The AKS design is an
-initial reference implementation, not an approved replacement for the Fabric
-baseline. See the [AKS medallion
-architecture](./docs/azure-aks-medallion-architecture.md) and [Java
-implementation](./services/aks-medallion).
-
-Unless a section explicitly describes Option 2, the remaining component,
-security, reliability, and implementation descriptions document the approved
-Fabric RT baseline.
+Fabric remains the analytical environment. PostgreSQL replication is the
+intended bridge into Fabric, and the Clinical NRT Lakehouse remains in place.
+The separate Fabric RT and AKS/ADX designs are documented as alternatives,
+not as the primary Changes-10 topology.
 
 ## 2. Architecture Approach
 
-| Area | Approach |
+| Area | Changes-10 direction |
 |---|---|
-| Ingress | Epic FHIR/HL7 events enter Azure Event Hubs as HL7 Base64 and are consumed by Fabric Eventstream. |
-| Raw preservation | Bronze Eventhouse preserves the original HL7 Base64 event and operational metadata for traceability and replay. |
-| Normalization | Base64 decoding, HL7 parsing, and mapping to JSON are performed inside Fabric. A second Event Hub for HL7 JSON is not part of the architecture. |
-| Medallion organization | Separate Bronze, Silver, and Gold Fabric workspaces establish deployment, access, and lifecycle boundaries. |
-| Real-time Gold | Gold is an Eventhouse/KQL row-and-column representation optimized for operational queries, dashboards, and event-driven detections. |
-| Analytical landing | A governed notebook process writes selected Gold data to Fabric Lakehouse Delta tables in OneLake. |
-| Semantic interoperability | Fabric ontologies and semantic models provide shared clinical and business meaning, while data agents provide governed natural-language access. |
-| External access | API Management fronts the AKS-hosted HAPI FHIR service and approved SQL endpoint, OneLake API, DAX Query API, and Foundry-backed access patterns. |
-| Alerting | Activator detects approved real-time conditions and invokes alerting workflows. It is not assumed to be the complete clinical subscription or durable delivery backbone. |
+| Ingress | Separate Azure Event Hubs receive internal Epic HL7 and external USCDI streams. |
+| Raw preservation | AKS Bronze workers preserve incoming payloads and metadata in ADLS Gen2. |
+| Normalization | AKS Silver workers process supported JSON/FHIR records and retain Bronze lineage. |
+| Medallion handoffs | Azure Service Bus separates and coordinates recoverable processing stages. |
+| Operational Gold | PostgreSQL holds Gold event history and current FHIR state. |
+| FHIR and identity | HAPI FHIR serves resources; opt-in JPA integration supports writes and exact enterprise-identifier MDM matching. |
+| Analytics | PostgreSQL replication into Fabric is the target analytical flow; the Clinical NRT Lakehouse remains. |
+| Notifications | FHIR subscriptions can send REST-hook notifications to a Service Bus relay. |
 
-### 2.1 AKS-Based RT vs. Microsoft Fabric RT Intelligence
+### 2.1 Real-Time Platform Alternatives
 
-| Dimension | AKS-based RT | Microsoft Fabric RT Intelligence |
-|---|---|---|
-| **Best fit** | Custom, high-control streaming, API, and integration workloads | Rapid delivery of operational analytics with minimal platform management |
-| **Architecture** | Event Hubs + AKS/KEDA + Service Bus + ADLS Gen2 + ADX, or PostgreSQL with Fabric replication | Event Hubs + Eventstream + Eventhouse + Activator + OneLake |
-| **Primary strength** | Maximum control over application behavior, integrations, and deployment | Integrated, low-code real-time experience across KQL, dashboards, Power BI, and OneLake |
-| **Pros** | Full control over parsers, retries, ordering, APIs, and replay; supports any runtime; KEDA scaling; clear stage boundaries; reusable AKS skills | Fast implementation; managed Eventstream, Eventhouse, KQL dashboards, and Activator; strong Power BI/OneLake integration; less infrastructure management |
-| **Cons** | Highest operational burden; cluster, container, broker, networking, identity, SRE, idempotency, recovery, and upgrade ownership remain with the engineering team | Less control over internal processing and recovery; capacity economics and throttling; specialized Fabric permissions and automation; Eventhouse is not a transactional store; Activator is not a complete durable delivery engine |
-| **Operational complexity** | **High** | **Low–Medium** |
-| **Implementation speed** | **Slower** | **Faster for supported patterns** |
-| **Customization** | **Highest** | **Medium–Low** |
-| **Low-latency operational queries** | Excellent with Azure Data Explorer or another purpose-built serving store | Excellent with Eventhouse/KQL |
-| **Bronze/Silver/Gold support** | Explicitly implemented in application code and Azure services | Native conceptual flow with Eventhouse, notebooks, and OneLake |
-| **Replay and correction** | Fully controllable, but checkpoints, deterministic identities, replay, and reconciliation must be engineered | Managed platform patterns, with recovery details constrained by Fabric behavior and operating model |
-| **Durable action delivery** | Strong with Service Bus, outbox, retry, and dead-letter patterns | Requires an external durable delivery path behind Activator for guaranteed integration delivery |
-| **Governance** | Azure RBAC, Entra, private networking, Key Vault, ADLS, and custom lineage | Centralized through Fabric workspaces, OneLake, tenant administration, and item permissions |
-| **Engineering skills** | Kubernetes, Java/.NET, messaging, ADLS, ADX, identity, networking, and SRE | KQL, Eventstream, Eventhouse, Power BI, OneLake, workspace administration, and Activator |
-| **Portability / exit strategy** | High at the application layer; Azure managed-service dependencies remain | Lower; workload definitions and real-time data-plane behavior are Fabric-specific |
-| **Cost profile** | AKS, Event Hubs, Service Bus, ADLS, selected ADX or PostgreSQL/Fabric, monitoring, and APIM | Fabric capacity plus supporting Azure ingress/services; potentially efficient when capacity is well utilized |
-| **Healthcare / PHI controls** | Strong control over networking, identity, logging, and processing boundaries; more controls must be implemented and maintained | Strong platform controls; regional, private-access, tenant, capacity, and workspace requirements must be validated |
-| **Key failure modes** | Pod eviction, checkpoint loss, duplicate processing, broker throttling, dead-letter growth, partial ADLS commits, and ADX ingestion failure | Capacity throttling, update-policy failure, tenant permissions, workspace dependencies, checkpoint/replay constraints, and action-delivery limits |
+Changes-10 is the focus of this document. The earlier AKS/ADX and Fabric RT
+designs remain alternatives for specific serving and analytics needs.
+
+| Dimension | Changes-10: AKS + PostgreSQL + Fabric | AKS + ADX alternative | Fabric RT alternative |
+|---|---|---|---|
+| Real-time processing | Separate AKS Java pipelines for Epic and USCDI | AKS Java pipelines | Fabric Eventstream and Eventhouse |
+| Gold system of record | PostgreSQL | Azure Data Explorer | Eventhouse |
+| FHIR and patient identity | HAPI FHIR with opt-in JPA/MDM integration | Requires a separately designed FHIR integration | Separate read-only HAPI/Eventhouse POC |
+| Fabric role | Analytical replica and retained Clinical NRT Lakehouse | Not required for the RT data plane | Real-time and analytical platform |
+| Stage handoffs | Service Bus | Service Bus | Fabric-managed processing |
+| Primary strength | PostgreSQL-backed operational state with Fabric analytics | KQL-oriented operational serving | Integrated managed real-time analytics |
 
 ## 3. Logical Architecture
 
-The two options share the source, consumer, security, and governance
-boundaries while using different real-time implementation platforms.
+Changes-10 is the primary design here; the earlier Fabric RT and AKS/ADX
+designs are retained below as alternatives.
 
-### 3.1 Option 1: Microsoft Fabric RT
+### 3.1 Changes-10: AKS, PostgreSQL, and Fabric Analytics
 
-![HIE Fabric RT architecture](hie-Changes-8.drawio.png)
-
-*Figure 1. Approved Fabric RT real-time intelligence and analytical architecture.*
+*The Changes-10 diagram above shows the overall topology.*
 
 | Source | Ingest | Bronze | Transform | Silver | Gold | Consumers |
 |---|---|---|---|---|---|---|
-| Epic FHIR/HL7 events | Azure Event Hubs and Fabric Eventstream | Eventhouse HL7 Base64 | Decode Base64, parse HL7, and map to JSON | Eventhouse HL7 JSON/USCDI+ | Eventhouse HL7 row/column | Dashboard, KQL, Activator, Lakehouse, Power BI, HAPI FHIR, APIs, and AI |
+| Internal Epic HL7 and external USCDI | Separate Azure Event Hubs | ADLS Gen2 raw payload and manifest | AKS Java normalization workers | ADLS Gen2 normalized JSON with lineage | AKS projector to PostgreSQL | HAPI FHIR, APIs, and Fabric analytics via the planned replication path |
 
-#### Fabric RT End-to-End Data Flow
+#### Changes-10 End-to-End Data Flow
 
-1. Epic publishes FHIR/HL7 events to Azure Event Hubs using an HL7 Base64 payload and the agreed event envelope.
-2. Fabric Eventstream consumes events once and delivers the unmodified payload and metadata to Bronze Eventhouse.
-3. Fabric transformation logic decodes Base64, parses HL7 segments, validates the message, and maps the event to structured JSON.
-4. Silver Eventhouse stores normalized HL7 JSON aligned to the approved USCDI+ profile and retains lineage to the Bronze event.
-5. Eventhouse update policies and curated mappings populate Gold row-and-column tables intended for KQL and operational analytics.
-6. Gold Eventhouse serves Real-Time Dashboards, KQL queries, and Activator-based detections.
-7. A Fabric notebook incrementally materializes approved Gold entities into Lakehouse Delta tables and OneLake.
-8. Power BI, semantic models, ontologies, data agents, and approved AI experiences consume governed Lakehouse/OneLake data.
-9. The AKS-hosted HAPI FHIR service provides an approved FHIR R4 access path integrated with the curated Gold data boundary.
-10. API Management exposes HAPI FHIR and other approved API products backed by appropriate data-access adapters rather than exposing the data stores directly.
+1. Epic and partner systems publish events to their dedicated Event Hubs.
+2. AKS Bronze workers checkpoint ingress and persist payloads and metadata to ADLS Gen2.
+3. Service Bus hands committed Bronze records to the Silver workers.
+4. Silver workers process supported JSON/FHIR resources, apply configured patient identity matching when enabled, and hold unresolved matches for review.
+5. Silver records are stored in ADLS Gen2 with lineage to Bronze.
+6. Service Bus hands Silver records to the Gold projectors.
+7. Gold commits event history and current FHIR state to PostgreSQL.
+8. HAPI FHIR exposes FHIR resources; the opt-in JPA integration synchronizes through FHIR APIs and supports subscriptions.
+9. PostgreSQL data is intended to replicate to Fabric for governed analytics. The Clinical NRT Lakehouse remains available to its existing consumers.
 
-### 3.2 Option 2: AKS RT Medallion
+The [AKS architecture document](./docs/azure-aks-medallion-architecture.md)
+covers PostgreSQL replication and the retained Clinical NRT Lakehouse. The
+[service guide](./services/aks-medallion/README.md) describes the Java
+implementation, configuration, and operational boundaries.
 
-![HIE AKS RT medallion architecture](hie-aks-medallion.drawio.png)
+### 3.2 Alternative: Microsoft Fabric Real-Time Intelligence
 
-*Figure 2. AKS RT medallion architecture.*
+![HIE Fabric RT alternative architecture](./hie-Changes-8.drawio.png)
 
-![Changes-10 AKS real-time Epic and USCDI medallions, PostgreSQL, and Fabric Clinical Lakehouse](hie-Changes-10.drawio.png)
+*Figure 2. Earlier Fabric RT alternative.*
 
-*Figure 3. Changes-10 PostgreSQL and Fabric replication direction.*
+The separate Fabric RT POC uses Eventstream and Eventhouse for ingestion,
+transformation, and operational analytics, with OneLake for analytical
+consumption. It is an alternative to the Changes-10 AKS real-time processing
+path, rather than the primary topology described here. See the [Fabric FHIR
+POC](./docs/fhir-gold-poc.md) for its implementation details.
 
-| Source | Ingest | Bronze | Transform | Silver | Gold | Consumers |
-|---|---|---|---|---|---|---|
-| Internal Epic HL7 and external USCDI | Separate Azure Event Hubs | ADLS Gen2 raw payload and manifest | AKS normalization worker; clinical parsing and mapping planned | ADLS Gen2 normalized JSON with lineage | AKS projector to PostgreSQL, or ADX in the alternative | HAPI FHIR over PostgreSQL, APIM, and Fabric analytics via planned replication |
+### 3.3 Alternative: AKS + ADLS + ADX
 
-#### AKS RT End-to-End Data Flow
+![AKS medallion alternative using ADLS and Azure Data Explorer](./hie-aks-medallion.drawio.png)
 
-1. Epic and partner systems publish HL7, FHIR, or JSON envelopes to Azure Event Hubs.
-2. The AKS Bronze worker checkpoints Event Hubs and commits the unmodified payload and metadata to ADLS Gen2 Bronze.
-3. The worker publishes a `bronze-ready` Service Bus message only after the Bronze commit is confirmed.
-4. The AKS Silver worker reads the committed Bronze object and currently accepts JSON objects; approved HL7/USCDI parsing and clinical mapping are planned.
-5. Invalid or unsupported messages move to the Service Bus dead-letter queue without discarding the original Bronze object.
-6. The Silver worker commits normalized JSON records to ADLS Gen2 Silver.
-7. A `silver-ready` message coordinates the AKS Gold projector.
-8. The PostgreSQL Gold option commits FHIR event and current-state projections together. The original ADX option remains available.
-9. HAPI FHIR reads the PostgreSQL projection and is exposed through APIM; Fabric replication and a durable Gold/action delivery path are planned, not implemented.
-10. The existing Fabric Clinical NRT Lakehouse remains in place for governed analytics.
+*Figure 3. AKS/ADX alternative.*
 
-The editable sources are [hie.drawio](./hie.drawio) (Changes-10) and
-[hie-aks-medallion.drawio](./hie-aks-medallion.drawio).
-Deployment assets and implementation boundaries are documented in the [AKS
-medallion service guide](./services/aks-medallion/README.md).
+This earlier AKS option uses ADX for KQL-oriented operational serving instead
+of PostgreSQL-backed HAPI FHIR and Fabric replication. The editable architecture
+is [hie.drawio](./hie.drawio), page Changes-10, and the [AKS implementation
+guide](./services/aks-medallion/README.md) describes the available service
+backends.
 
 ## 4. Component Architecture
 
 | Component | Role | Responsibility |
 |---|---|---|
-| Epic FHIR/HL7 events | Clinical source | Produces the source event and source identifiers. Message families and envelope are governed by an interface contract. |
-| Azure Event Hubs | Ingress broker | Provides partitioned event ingress and decouples Epic from Fabric consumers. |
-| Fabric Eventstream | Streaming ingestion | Consumes Event Hubs, routes events to Bronze, and provides the managed Fabric entry point. |
-| Bronze Eventhouse | Raw persistence | Stores original Base64, envelope, timestamps, source, partition/offset, schema version, correlation identifiers, and processing status. |
-| Transformation service | Decode and parse | Decodes Base64, parses HL7, validates required segments, emits normalized JSON, and quarantines invalid or unsupported events. |
-| Silver Eventhouse | Normalized clinical event | Stores structured HL7 JSON/USCDI+ with traceability to Bronze and consistent event metadata. |
-| Gold Eventhouse | Operational serving | Stores row-and-column entities for KQL, dashboarding, operational detection, and downstream materialization. |
-| Real-Time Dashboard | Operational visualization | Uses KQL queries over Gold Eventhouse for current flow, quality, and clinical operations views. |
-| Activator | Detection and action | Evaluates approved event and state conditions and triggers governed alerting or workflow actions. |
-| Fabric Notebook | Materialization | Performs incremental Gold-to-Lakehouse processing, reconciliation, quality controls, and checkpointing. |
-| Fabric Lakehouse/OneLake | Analytical storage | Hosts curated Delta tables and provides the governed analytical foundation. |
-| Ontologies and semantic models | Semantic interoperability | Provide standardized meaning, measures, relationships, and terminology abstraction across consumers. |
-| Data Agents | Natural-language data access | Provide governed question answering over approved semantic and data scopes. |
-| Power BI | Business intelligence | Uses a semantic model over curated Fabric data. |
-| Azure API Management | API boundary | Applies authentication, authorization, quotas, policies, observability, versioning, and product governance. |
-| AKS-hosted HAPI FHIR | FHIR API service | Provides a governed FHIR R4 interface over approved clinical resources and remains behind API Management for external access. |
-| SQL endpoint, OneLake API, and DAX Query API | Data access adapters | Provide fit-for-purpose read paths. APIM or an API service mediates access; clients do not receive direct broad data-store permissions. |
-| Foundry APIs and language models | AI integration | Support approved AI or Copilot scenarios through governed tools and APIs rather than unrestricted data access. |
+| Epic HL7 and external USCDI sources | Clinical sources | Publish events into their separately configured pipelines. |
+| Azure Event Hubs | Ingress broker | Buffers partitioned events for the Bronze workers. |
+| AKS Java workloads | Processing | Independently run Bronze ingestion, Silver normalization, and Gold projection. |
+| Azure Data Lake Storage Gen2 | Bronze and Silver persistence | Preserves source payloads, normalized records, and their lineage. |
+| Azure Service Bus | Stage handoffs | Coordinates durable processing and dead-letter handling between stages. |
+| PostgreSQL | Operational Gold | Stores Gold event history and current FHIR resource state. |
+| HAPI FHIR JPA | FHIR and patient identity | Provides FHIR API integration, Gold resource synchronization, and opt-in Silver MDM matching. |
+| HAPI subscription relay | Notification handoff | Publishes REST-hook notifications to Service Bus after successful broker delivery. |
+| Fabric and Clinical NRT Lakehouse | Analytics | Receives the planned analytical replica and retains existing NRT analytics. |
+| Azure API Management | API boundary | Provides the managed access boundary for approved external API consumers. |
 
 ## 5. Data Architecture
 
@@ -211,62 +173,60 @@ medallion service guide](./services/aks-medallion/README.md).
 
 ### 5.3 Gold
 
-- Eventhouse Gold is the operational serving layer, not a Fabric Warehouse in this architecture.
-- Shape tables around approved use cases such as patient, encounter, observation, diagnosis, provider, facility, and event status.
-- Use Gold KQL tables to feed real-time dashboards, KQL queries, Activator, and the notebook-based analytical materialization path.
-- Use Lakehouse Gold/curated Delta tables as the analytical serving layer for Power BI, semantic models, data agents, and broader OneLake consumption.
+- PostgreSQL is the operational Gold store for event history and current FHIR resources.
+- The HAPI JPA integration synchronizes resources through FHIR APIs; application code does not write directly to HAPI JPA tables.
+- Preserve source-version ordering and replay behavior when updating current state.
+- The intended Fabric replica supports analytics; PostgreSQL remains the operational write path.
 
 ## 6. Consumption and Data Egress
 
 | Consumer | Technical path | Control point |
 |---|---|---|
-| Real-Time Dashboard | Direct KQL query against Gold Eventhouse | Fabric workspace permissions and KQL database/table policies |
-| KQL users and operational tools | KQL query endpoint over Gold Eventhouse | Entra identity, database permissions, and query governance |
-| Activator and alerts | Gold Eventhouse event/state detection to Activator to governed action | Activator rule ownership, approved action, audit, and rate controls |
-| Power BI | Lakehouse/OneLake to semantic model to Power BI report | Semantic model RLS/OLS, sensitivity labels, and workspace/app permissions |
-| Data Agents | Approved Lakehouse/semantic model scope to Fabric Data Agent | Agent instructions, source scope, identity propagation, and response audit |
-| Calling applications | Client to APIM to HAPI FHIR or a constrained adapter for the SQL endpoint or OneLake-backed service | OAuth, APIM product/subscription, claims, resource/field-level authorization, and throttling |
-| Copilot | Copilot/agent to APIM or governed agent tool to approved data service | Agent identity, least-privilege tool scope, user authorization, and logging |
-| Foundry applications | Foundry tool or API to APIM to approved retrieval/query service | Managed identity, private access where required, and content and prompt controls |
+| FHIR applications | Client to APIM to HAPI FHIR | OAuth, resource-level authorization, audit, and throttling |
+| Downstream event consumers | HAPI REST hook to relay to Service Bus | Authenticated relay, restricted queue permissions, consumer deduplication, and monitoring |
+| Power BI and Fabric analytics | PostgreSQL analytical replica to Fabric/Clinical NRT Lakehouse | Fabric identity, workspace and item permissions, and governed semantic models |
+| Copilot and Foundry applications | Approved API or governed Fabric data source | Least-privilege tool scope, user authorization, content controls, and audit |
 
-Direct APIM-to-database arrows in the architecture are logical relationships. APIM does not itself execute arbitrary SQL, DAX, or OneLake queries. Each path requires a supported backend API or adapter that validates request semantics, applies authorization, executes constrained queries, shapes the response, and records audit telemetry. HAPI FHIR is an explicit API backend rather than a direct APIM-to-data-store connection.
+APIM fronts supported backend APIs; it does not itself execute arbitrary SQL or
+query Fabric data. HAPI FHIR is an explicit API backend, while analytical
+consumers use the governed Fabric replica and its supported access patterns.
 
 ## 7. Security, Privacy, and Compliance Architecture
 
-- Use Microsoft Entra ID identities and managed identities for service-to-service access. Avoid embedded keys in notebooks, Eventstream configurations, APIs, and client applications.
-- Apply least-privilege Fabric workspace, Eventhouse database/table, Lakehouse, semantic model, and API permissions.
-- Separate Bronze, Silver, and Gold workspaces and deployment identities. Cross-workspace promotion occurs through approved pipelines or deployment processes.
+- Use Microsoft Entra ID identities and managed identities for service-to-service access. Keep secrets in an approved secret store.
+- Apply least-privilege access to AKS workloads, Event Hubs, Service Bus, ADLS Gen2, PostgreSQL, HAPI FHIR, Fabric, and APIs.
+- Isolate the Epic and USCDI pipelines, storage paths, queues, database access, and workload identities.
 - Encrypt data in transit and at rest using platform capabilities and organization-approved key-management requirements.
 - Classify clinical data, minimize fields delivered to each consumer, and enforce consumer authorization at the semantic/API layer.
 - Keep PHI out of operational logs where possible. Store identifiers, hashes, status codes, and correlation values sufficient for support and lineage.
-- Validate private connectivity requirements for Event Hubs, Fabric, AKS/HAPI FHIR, API backends, Key Vault, Foundry, and consuming applications during implementation.
-- Conduct threat modeling for ingestion spoofing, malformed HL7, replay abuse, over-broad KQL/SQL access, API enumeration, agent prompt injection, and unintended semantic-model disclosure.
+- Validate private connectivity requirements for Event Hubs, AKS, PostgreSQL, HAPI FHIR, Service Bus, ADLS, Fabric, and API backends.
+- Conduct threat modeling for ingestion spoofing, malformed payloads, replay abuse, over-broad SQL/API access, API enumeration, agent prompt injection, and unintended analytical disclosure.
 
 ## 8. Reliability, Resilience, and Operations
 
 | Concern | Design requirement |
 |---|---|
-| Idempotency | Use stable event and message identifiers plus payload hashes; transformation and materialization jobs must tolerate replay. |
-| Poison events | Quarantine invalid messages with sanitized diagnostic details and preserve the Bronze source event. |
-| Checkpointing | Eventstream and notebook/materialization processes maintain independent checkpoints and observable lag. |
-| Schema evolution | Version the event envelope, HL7 mappings, USCDI+ profile, KQL tables, Delta tables, semantic models, and APIs. |
-| Reconciliation | Compare Bronze received, Silver valid/invalid, Gold promoted, and Lakehouse materialized counts by controlled windows. |
-| Monitoring | Track ingestion lag, parse failures, update-policy failures, Gold freshness, notebook duration/failure, Activator actions, HAPI FHIR/API latency and errors, and model refresh. |
-| Recovery | Document replay boundaries, materialization restart, rule rollback, semantic-model rollback, API version rollback, and operator ownership. |
-| Regional resilience | Regional topology, failover authority, subscription/routing state, RTO/RPO, and duplicate behavior remain implementation choices requiring validation. |
+| Idempotency | Use stable event and message identifiers plus payload hashes; stage processors and HAPI synchronization must tolerate replay. |
+| Poison events | Dead-letter invalid or unsupported events with sanitized diagnostics while preserving the Bronze source event. |
+| Checkpointing | Track Event Hubs checkpoints and Service Bus queue depth/age independently for each pipeline and stage. |
+| Schema evolution | Version event envelopes, supported clinical mappings, FHIR resources, PostgreSQL schema, Fabric replica, and APIs. |
+| Reconciliation | Compare Bronze received, Silver processed/held, Gold committed, and Fabric replicated counts over controlled windows. |
+| Monitoring | Track ingestion lag, processing failures, dead letters, Gold freshness, HAPI/API latency, subscription relay delivery, and replication lag. |
+| Recovery | Document replay boundaries, PostgreSQL recovery, queue re-drive, HAPI recovery, Fabric replication restart, and operator ownership. |
+| Regional resilience | Validate regional topology, failover authority, subscription state, RTO/RPO, and duplicate behavior. |
 
-## 9. Eight Implementation Validation Areas
+## 9. Implementation Validation Areas
 
 | Area | Name | Primary outcome |
 |---|---|---|
-| 1 | Event Hub to Eventstream to Bronze Eventhouse | Prove secure ingestion, raw preservation, metadata capture, throughput, lag, and replay traceability. |
-| 2 | HL7 Base64 to HL7 JSON and USCDI+ | Prove Base64 decoding, HL7 parsing, validation, error quarantine, Silver normalization, and Gold update policies. |
-| 3 | Real-Time Dashboard | Prove KQL-backed operational visualization, freshness, filtering, and representative event/quality measures. |
-| 4 | Activator alerts | Prove selected rules, action delivery, throttling behavior, auditability, and the boundary between operational alerts and clinical delivery. |
-| 5 | Eventhouse to Lakehouse/OneLake | Prove incremental notebook materialization, Delta schema, checkpointing, reconciliation, and analytical query readiness. |
-| 6 | Semantic interoperability and data agents | Prove ontologies, semantic models, approved terminology mapping, natural-language questions, identity, and result traceability. |
-| 7 | Governed API access through APIM | Compare SQL endpoint-backed, OneLake-backed, DAX Query, and Foundry API patterns through a constrained backend service and APIM. |
-| 8 | AKS-hosted HAPI FHIR | Prove a governed FHIR R4 service path for approved Gold clinical resources through HAPI FHIR, AKS, and APIM. |
+| 1 | Epic and USCDI ingress | Verify isolated Event Hubs, identities, checkpoints, and source contracts. |
+| 2 | Bronze persistence and replay | Verify ADLS durability, metadata, lineage, and replay behavior. |
+| 3 | Silver processing and identity | Verify supported input handling, exact enterprise-identifier matching, and unresolved-match holds. |
+| 4 | PostgreSQL Gold | Verify event/current-state consistency, version ordering, conflict handling, and replay safety. |
+| 5 | HAPI FHIR JPA | Verify FHIR API synchronization, MDM behavior, identity controls, and recovery procedures. |
+| 6 | FHIR subscriptions | Verify REST-hook handling, Service Bus delivery, retries, deduplication, and monitoring. |
+| 7 | Fabric analytics | Validate PostgreSQL replication, schema compatibility, replication lag, and Clinical NRT Lakehouse integration. |
+| 8 | Security and operations | Validate access controls, observability, recovery, runbooks, and ownership across both pipelines. |
 
 ## 10. Cross-Implementation Acceptance Criteria
 
@@ -282,28 +242,30 @@ Direct APIM-to-database arrows in the architecture are logical relationships. AP
 
 | Workstream | Key outputs |
 |---|---|
-| Platform foundation | Fabric capacities/workspaces, Eventhouse databases, Lakehouse, deployment environments, network, and identity design |
-| Data contract | Event envelope, supported HL7 message families, required metadata, schema versioning, USCDI+ mapping, and quality rules |
-| Streaming and transformation | Event Hub integration, Eventstream, Bronze tables, decoder/parser, Silver tables, update policies, and Gold tables |
-| Operational experience | KQL query library, Real-Time Dashboard, Activator rules, action governance, and support dashboards |
-| Analytical and semantic | Notebook materialization, Delta tables, semantic model, ontology, Power BI, and data agent |
-| Integration and AI | AKS-hosted HAPI FHIR, backend API adapters, APIM products/policies, Copilot/Foundry tools, identity propagation, and audit |
-| Security and operations | Threat model, access matrix, monitoring, reconciliation, replay, disaster recovery, runbooks, and ownership |
+| Azure platform foundation | AKS, Event Hubs, Service Bus, ADLS Gen2, PostgreSQL, network, and identity design |
+| Source and clinical contracts | Event envelopes, supported HL7/USCDI inputs, FHIR profiles, identifier system, and mapping rules |
+| Medallion processing | Bronze persistence, Silver normalization, Gold projection, lineage, replay, and dead-letter handling |
+| FHIR and patient identity | HAPI JPA deployment, exact-identifier MDM rules, review workflow, subscriptions, and relay |
+| Fabric analytics | PostgreSQL replication, Clinical NRT Lakehouse integration, schema controls, and consumer access |
+| Security and operations | Threat model, access matrix, monitoring, reconciliation, disaster recovery, runbooks, and ownership |
 
 ## 12. Assumptions, Constraints, and Open Implementation Topics
 
-- The architecture diagram and the approaches in this document are authoritative for the eight implementation validation areas unless changed through architecture governance.
-- Gold Eventhouse and analytical Lakehouse are intentionally distinct serving models. The term "Gold" must always be qualified as operational Eventhouse Gold or analytical Lakehouse Gold.
-- The specific HL7 parser implementation, supported HL7 versions/message families, and USCDI+ mapping profile will be selected and versioned during validation area 2.
-- Capacity sizing requires measured event rate, peak/burst factor, payload size, retention, query concurrency, notebook workload, semantic-model size, and API demand.
-- The diagram does not establish a production clinical Pub/Sub contract. Dynamic subscriptions, durable endpoint delivery, retries, DLQ, and region recovery require a separate architecture review if included in production scope.
+- Changes-10 is the current POC architecture direction; the Fabric RT and AKS/ADX paths are alternatives.
+- Gold PostgreSQL is the operational write path. The Fabric replica is intended for analytical consumption, not clinical writes.
+- Supported HL7 versions, message families, and USCDI mapping rules must be selected and validated before clinical processing.
+- Capacity sizing requires measured event rates, peak/burst factor, payload size, retention, PostgreSQL workload, replication lag, query demand, and API volume.
+- FHIR subscriptions and the Service Bus relay establish the notification path; production delivery guarantees, recovery, and clinical workflow behavior require operational validation.
 - RTO, RPO, data residency, retention, private networking, customer-managed key requirements, and regulated-data controls must be confirmed with the responsible governance teams.
 
 ## 13. Architecture Governance
 
-Any proposed change to ingress, Bronze/Silver/Gold boundaries, transformation location, Eventhouse-to-Lakehouse materialization, semantic access, API exposure, or identity model must be recorded in an architecture record. The change must identify the affected implementation areas, security and privacy impact, migration impact, rollback approach, and diagram/document updates before implementation.
+Any proposed change to ingress, Bronze/Silver/Gold boundaries, transformation location, PostgreSQL-to-Fabric replication, semantic access, API exposure, or identity model must be recorded in an architecture record. The change must identify affected implementation areas, security and privacy impact, migration impact, rollback approach, and diagram/document updates before implementation.
 
 ## Appendix A. Architecture Traceability
+
+The following traceability notes apply to the earlier Fabric RT alternative,
+not the Changes-10 primary architecture.
 
 | Architecture element | Rationale |
 |---|---|
@@ -316,7 +278,9 @@ Any proposed change to ingress, Bronze/Silver/Gold boundaries, transformation lo
 
 ## Appendix B. Source and Architecture Basis
 
-This document is based on the HIE solution architecture diagram and the prior HIE event-handling analysis. The prior analysis identified the need to preserve raw HL7 Base64, maintain a Fabric medallion/real-time analytics path, separate persistence from notification, and validate security, replay, latency, failure handling, and regional recovery. This document supersedes the prior discussion posture only for the specific architecture components and eight validation areas expressly established here. Production clinical notification routing remains outside the approved scope unless separately authorized.
+The appendix material below records a separate Fabric RT/Activator POC and is
+not the Changes-10 AKS real-time topology. Changes-10 is described in the
+overview, logical architecture, and AKS service guide above.
 
 ## ePNA Activator Alert Implementation
 
