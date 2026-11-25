@@ -332,12 +332,13 @@ operator action, not in the live clinical projections.
 
 ### Planned Silver patient identity rules with HAPI MDM
 
-The proposed integration uses a HAPI FHIR JPA server backed by PostgreSQL to
+The opt-in integration uses a HAPI FHIR JPA server backed by PostgreSQL to
 link incoming FHIR R4 Patient source resources to MDM Golden Patient resources.
 An MDM "Golden Resource" is HAPI's master identity resource; it is **not** the
-medallion Gold layer. This integration is not implemented: today's Silver
-processor accepts JSON objects and does not validate FHIR, perform matching,
-or hold ambiguous patients for review.
+medallion Gold layer. The Java service can check MDM links and hold unresolved
+records in the Service Bus dead-letter path; it does not provide full FHIR
+validation or a steward review UI. See the [service documentation](../services/aks-medallion/README.md#opt-in-hapi-jpa-integration)
+for configuration, constraints and remaining reconciliation work.
 
 The intended rules for both source pipelines are:
 
@@ -368,9 +369,10 @@ The intended rules for both source pipelines are:
    privilege, audit access and decisions, and exclude PHI from operational
    logs and queue diagnostics.
 
-Separate MDM databases do not automatically share patient links. Decide
-whether the two pipelines use an approved shared identity domain or how their
-identities are reconciled before relying on cross-pipeline deduplication.
+The Epic and USCDI pipelines use separate MDM identity domains. Their
+databases do not automatically share patient links; cross-pipeline
+deduplication requires a separately designed and approved reconciliation
+service.
 
 The following is an **illustrative, unvalidated** HAPI MDM rules template, not
 a deployed configuration. Replace the placeholder in both locations with the
@@ -506,6 +508,14 @@ make PostgreSQL the only retained copy of the source event.
 The HAPI layer queries the current PostgreSQL FHIR projection through a
 read-only database identity. It does not expose unrestricted SQL access or
 write directly to HAPI JPA tables.
+
+Alternatively, the opt-in `postgresql-hapi` Gold backend first commits the
+custom projection and then synchronizes its current state through a separate
+HAPI JPA server's FHIR API. This enables HAPI-managed FHIR resources and
+subscription processing, but does not make the PostgreSQL transaction and HTTP
+write atomic. Reconciliation, dead-letter re-drive, and durable HAPI-side
+subscription delivery remain required. The existing read-only adapter and
+the JPA server are distinct services.
 
 ### Fabric Mirroring and CDC Replication: Approach 2
 

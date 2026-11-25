@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.net.http.HttpClient;
 import java.time.Instant;
 import java.util.UUID;
 import javax.sql.DataSource;
@@ -25,6 +26,10 @@ class PostgresGoldStoreTest {
     @Import(PostgresGoldStore.class)
     static class StoreConfiguration { }
 
+    @Configuration(proxyBeanMethods = false)
+    @Import({PostgresGoldStore.class, GoldHapiClient.class, SilverHapiMdm.class})
+    static class JpaConfiguration { }
+
     @Test
     void adxBackendDoesNotCreatePostgresStore() {
         new ApplicationContextRunner().withUserConfiguration(StoreConfiguration.class)
@@ -40,6 +45,28 @@ class PostgresGoldStoreTest {
                 .run(context -> {
                     assertNull(context.getStartupFailure());
                     assertNotNull(context.getBean(PostgresGoldStore.class));
+                });
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "POSTGRES_HOST", matches = ".+")
+    void jpaClientsAndStoreAreCreatedForTheirRoles() {
+        var runner = new ApplicationContextRunner().withUserConfiguration(JpaConfiguration.class)
+                .withBean(HttpClient.class, HttpClient::newHttpClient)
+                .withBean(ObjectMapper.class, ObjectMapper::new);
+        runner.withPropertyValues("app.role=gold", "app.gold-backend=postgresql-hapi",
+                        "app.hapi-gold-url=https://example.invalid/fhir", "app.hapi-gold-token=test-token")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertNotNull(context.getBean(PostgresGoldStore.class));
+                    assertNotNull(context.getBean(GoldHapiClient.class));
+                });
+        runner.withPropertyValues("app.role=silver", "app.gold-backend=adx", "app.silver-hapi-enabled=true",
+                        "app.hapi-silver-url=https://example.invalid/fhir", "app.hapi-silver-token=test-token",
+                        "app.patient-identifier-system=https://example.invalid/eid")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertNotNull(context.getBean(SilverHapiMdm.class));
                 });
     }
 

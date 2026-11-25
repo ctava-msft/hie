@@ -32,8 +32,19 @@ app:
   checkpoint-container: ${CHECKPOINT_CONTAINER:eventhub-checkpoints}
   quarantine-container: ${QUARANTINE_CONTAINER:quarantine}
   gold-backend: ${GOLD_BACKEND:adx}
+  hapi-gold-url: ${HAPI_GOLD_URL:}
+  hapi-gold-token: ${HAPI_GOLD_TOKEN:}
+  silver-hapi-enabled: ${SILVER_HAPI_ENABLED:false}
+  hapi-silver-url: ${HAPI_SILVER_URL:}
+  hapi-silver-token: ${HAPI_SILVER_TOKEN:}
+  patient-identifier-system: ${PATIENT_IDENTIFIER_SYSTEM:}
   adx-ingestion-url: ${ADX_INGESTION_URL:}
   adx-database: ${ADX_DATABASE:hie_gold}
   gold-table: ${GOLD_TABLE:GoldEvent}
   max-message-bytes: ${MAX_MESSAGE_BYTES:1048576}
   worker-concurrency: ${WORKER_CONCURRENCY:4}
+  subscription-relay:
+    enabled: ${SUBSCRIPTION_RELAY_ENABLED:false}
+    queue: ${SUBSCRIPTION_RELAY_QUEUE:}
+    token: ${SUBSCRIPTION_RELAY_TOKEN:}
+    max-bytes: ${SUBSCRIPTION_RELAY_MAX_BYTES:131072}

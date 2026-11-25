@@ -8,7 +8,8 @@ read-only HAPI R4 adapter, Gold Eventstream ingestion, and five synthetic ePNA
 lifecycle [Bundles and event files](./samples/epna). In that Fabric option Gold
 remains authoritative; no HAPI JPA, SQL, Cosmos or second clinical repository
 is introduced there. The separate AKS PostgreSQL option uses a custom,
-read-only FHIR projection rather than HAPI JPA.
+read-only FHIR projection; the AKS pipeline also has an opt-in HAPI JPA
+integration that requires separately provisioned servers.
 
 **Imported Activator delivery service:** [Java 21 / Spring Boot service](./services/fabric-rt-actuator)
 provides webhook intake, durable Service Bus delivery to a downstream API, and
@@ -23,7 +24,8 @@ that is **not yet implemented**.
 provides role-specific Bronze, Silver, and Gold workloads, durable Service Bus
 stage handoffs, ADLS Gen2 persistence, and selectable ADX or PostgreSQL Gold.
 The existing Bicep and Kubernetes deployment target ADX. The PostgreSQL/Fabric
-deployment, clinical HL7/FHIR mapping, and replication remain future work.
+deployment, clinical HL7/FHIR mapping, HAPI JPA production controls, and
+replication remain future work.
 
 | Document information | Value |
 |---|---|

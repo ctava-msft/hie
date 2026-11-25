@@ -7,6 +7,8 @@ import java.util.Base64;
 import org.example.hie.medallion.StageRecords.BronzeRecord;
 import org.example.hie.medallion.StageRecords.SilverRecord;
 import org.example.hie.medallion.StageRecords.StagePointer;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -16,13 +18,18 @@ class SilverProcessor {
     private final StorageSupport storage;
     private final QueuePublisher publisher;
     private final ObjectMapper json;
+    private final ObjectProvider<SilverHapiMdm> mdm;
+    private final boolean mdmEnabled;
 
     SilverProcessor(MedallionProperties properties, StorageSupport storage,
-                    QueuePublisher publisher, ObjectMapper json) {
+                    QueuePublisher publisher, ObjectMapper json, ObjectProvider<SilverHapiMdm> mdm,
+                    @Value("${app.silver-hapi-enabled:false}") boolean mdmEnabled) {
         this.properties = properties;
         this.storage = storage;
         this.publisher = publisher;
         this.json = json;
+        this.mdm = mdm;
+        this.mdmEnabled = mdmEnabled;
     }
 
     void process(StagePointer pointer) {
@@ -40,6 +47,13 @@ class SilverProcessor {
             }
         } catch (Exception exception) {
             throw new PermanentStageException("UnsupportedPayload", exception);
+        }
+        if (mdmEnabled) {
+            SilverHapiMdm client = mdm.getIfAvailable();
+            if (client == null) {
+                throw new IllegalStateException("Silver HAPI MDM client is not configured");
+            }
+            payload = client.normalize(bronze.source(), payload);
         }
         String blobName = "event=" + safePath(bronze.eventId()) + ".json";
         SilverRecord silver = new SilverRecord(

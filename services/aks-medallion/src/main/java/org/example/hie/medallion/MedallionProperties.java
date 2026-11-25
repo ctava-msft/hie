@@ -38,8 +38,9 @@ public record MedallionProperties(
         quarantineContainer = quarantineContainer == null || quarantineContainer.isBlank()
                 ? "quarantine" : quarantineContainer;
         goldBackend = goldBackend == null || goldBackend.isBlank() ? "adx" : goldBackend;
-        if (!goldBackend.equals("adx") && !goldBackend.equals("postgresql")) {
-            throw new IllegalArgumentException("app.gold-backend must be adx or postgresql");
+        if (!goldBackend.equals("adx") && !goldBackend.equals("postgresql")
+                && !goldBackend.equals("postgresql-hapi")) {
+            throw new IllegalArgumentException("app.gold-backend must be adx, postgresql or postgresql-hapi");
         }
         adxIngestionUrl = adxIngestionUrl == null ? "" : adxIngestionUrl;
         adxDatabase = adxDatabase == null || adxDatabase.isBlank() ? "hie_gold" : adxDatabase;

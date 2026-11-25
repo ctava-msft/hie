@@ -25,15 +25,18 @@ class GoldProcessor {
     private final TokenCredential credential;
     private final HttpClient http;
     private final ObjectProvider<PostgresGoldStore> postgres;
+    private final ObjectProvider<GoldHapiClient> hapi;
 
     GoldProcessor(MedallionProperties properties, StorageSupport storage, ObjectMapper json,
-                  TokenCredential credential, HttpClient http, ObjectProvider<PostgresGoldStore> postgres) {
+                  TokenCredential credential, HttpClient http, ObjectProvider<PostgresGoldStore> postgres,
+                  ObjectProvider<GoldHapiClient> hapi) {
         this.properties = properties;
         this.storage = storage;
         this.json = json;
         this.credential = credential;
         this.http = http;
         this.postgres = postgres;
+        this.hapi = hapi;
     }
 
     void process(StagePointer pointer) {
@@ -45,12 +48,20 @@ class GoldProcessor {
         GoldRecord gold = new GoldRecord(
                 "1.0", silver.eventId(), silver.source(), silver.eventType(), silver.eventTime(),
                 Instant.now(), pointer.blobName(), pointer.payloadHash(), silver.payload());
-        if (properties.goldBackend().equals("postgresql")) {
+        if (properties.goldBackend().equals("postgresql") || properties.goldBackend().equals("postgresql-hapi")) {
             PostgresGoldStore store = postgres.getIfAvailable();
             if (store == null) {
                 throw new IllegalStateException("PostgreSQL Gold store is not configured");
             }
             store.commit(gold);
+            if (properties.goldBackend().equals("postgresql-hapi")) {
+                GoldHapiClient client = hapi.getIfAvailable();
+                if (client == null) {
+                    throw new IllegalStateException("HAPI Gold client is not configured");
+                }
+                store.synchronizeCurrent(gold.payload().path("resourceType").asText(),
+                        gold.payload().path("id").asText(), client.client());
+            }
             return;
         }
         try {

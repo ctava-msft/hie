@@ -1,6 +1,8 @@
 package org.example.hie.medallion;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -18,7 +20,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnExpression("'${app.role}' == 'gold' and '${app.gold-backend:adx}' == 'postgresql'")
+@ConditionalOnExpression("'${app.role}' == 'gold' and "
+        + "('${app.gold-backend:adx}' == 'postgresql' or '${app.gold-backend:adx}' == 'postgresql-hapi')")
 class PostgresGoldStore {
     private static final Set<String> TYPES = Set.of("Patient", "Encounter", "Condition",
             "Observation", "ServiceRequest", "DiagnosticReport", "Provenance");
@@ -32,7 +35,7 @@ class PostgresGoldStore {
         this.dataSource = dataSource;
     }
 
-    private static DataSource configuredDataSource() {
+    static DataSource configuredDataSource() {
         var source = new PGSimpleDataSource();
         source.setServerNames(new String[] {required("POSTGRES_HOST")});
         source.setDatabaseName(required("POSTGRES_DATABASE"));
@@ -61,6 +64,7 @@ class PostgresGoldStore {
         if (payload == null || !payload.isObject()) {
             throw new PermanentStageException("InvalidFhirIdentity", null);
         }
+
         String type = payload.path("resourceType").asText("");
         String id = payload.path("id").asText("");
         if (!payload.path("resourceType").isTextual() || !payload.path("id").isTextual()
@@ -92,6 +96,37 @@ class PostgresGoldStore {
             }
         } catch (SQLException exception) {
             throw new IllegalStateException("PostgreSQL Gold transaction failed", exception);
+        }
+    }
+
+    void synchronizeCurrent(String type, String id, HapiVersionedClient client) {
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT resource_json::text, version_time FROM hie_gold.fhir_current
+                    WHERE resource_type = ? AND fhir_id = ? FOR UPDATE
+                    """)) {
+                statement.setString(1, type);
+                statement.setString(2, id);
+                try (ResultSet result = statement.executeQuery()) {
+                    if (!result.next()) {
+                        throw new SQLException("Current resource was not found");
+                    }
+                    JsonNode resource = new ObjectMapper().readTree(result.getString(1));
+                    if (!(resource instanceof ObjectNode object)) {
+                        throw new IllegalStateException("Current resource is not a JSON object");
+                    }
+                    client.write(object, result.getTimestamp(2).toInstant());
+                }
+                connection.commit();
+            } catch (Exception exception) {
+                connection.rollback();
+                throw exception;
+            }
+        } catch (PermanentStageException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalStateException("HAPI synchronization failed", exception);
         }
     }
 

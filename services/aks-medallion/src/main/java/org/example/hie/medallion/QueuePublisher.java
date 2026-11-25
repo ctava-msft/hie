@@ -17,13 +17,17 @@ class QueuePublisher {
     }
 
     void publish(String queueName, String eventId, Object payload) {
+        publish(queueName, eventId, eventId, payload);
+    }
+
+    void publish(String queueName, String messageId, String idempotencyKey, Object payload) {
         try (var sender = builder.sender().queueName(queueName).buildClient()) {
             var body = BinaryData.fromBytes(json.writeValueAsBytes(payload));
             var message = new ServiceBusMessage(body)
-                    .setMessageId(eventId)
-                    .setCorrelationId(eventId)
+                    .setMessageId(messageId)
+                    .setCorrelationId(idempotencyKey)
                     .setContentType("application/json");
-            message.getApplicationProperties().put("idempotencyKey", eventId);
+            message.getApplicationProperties().put("idempotencyKey", idempotencyKey);
             sender.sendMessage(message);
         } catch (Exception exception) {
             throw new IllegalStateException("Queue publication not confirmed", exception);
