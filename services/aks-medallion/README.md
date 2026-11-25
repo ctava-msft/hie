@@ -51,6 +51,11 @@ Unsupported Gold payloads are dead-lettered with a sanitized reason. Do not
 enable clinical consumers until the required mappings and controls are
 implemented and approved.
 
+The [planned HAPI MDM patient identity rules](../../docs/azure-aks-medallion-architecture.md#planned-silver-patient-identity-rules-with-hapi-mdm)
+specify exact matching on a configured enterprise identifier and review of
+unresolved records. HAPI JPA, MDM matching, and the review workflow are not
+implemented in this service.
+
 ## PostgreSQL and HAPI configuration
 
 Provision PostgreSQL separately with private networking, verified TLS,

@@ -330,6 +330,106 @@ Supported FHIR resources and HL7 versions should be allow-listed. Unknown but
 valid message types belong in a quarantine or unsupported path with a clear
 operator action, not in the live clinical projections.
 
+### Planned Silver patient identity rules with HAPI MDM
+
+The proposed integration uses a HAPI FHIR JPA server backed by PostgreSQL to
+link incoming FHIR R4 Patient source resources to MDM Golden Patient resources.
+An MDM "Golden Resource" is HAPI's master identity resource; it is **not** the
+medallion Gold layer. This integration is not implemented: today's Silver
+processor accepts JSON objects and does not validate FHIR, perform matching,
+or hold ambiguous patients for review.
+
+The intended rules for both source pipelines are:
+
+1. Accept one FHIR R4 resource per event. Validate and map incoming HL7 and
+   USCDI data to FHIR upstream; these mappings are not yet implemented.
+2. Configure one approved enterprise identifier system URI for Patient
+   matching. The deployment owner must provide the URI; do not assume that a
+   FHIR logical ID is an enterprise identifier or that HAPI generates one.
+   The organization remains responsible for issuing and governing the
+   enterprise identifier values.
+3. Use only an exact match on the configured identifier system **and** value
+   for automatic Patient linking. Do not automatically link or merge based on
+   name, date of birth, address, phone, or other demographic similarity.
+   Separate source Patient records may link to the same MDM Golden Patient.
+4. Validate the required identifier before submitting a Patient to MDM. Hold
+   missing, invalid, conflicting, or ambiguous identifiers for authorized
+   review; never send unresolved records to Gold. Hold resources with Patient
+   references when their identity cannot be resolved safely. Define and
+   implement the durable hold, review, correction, and re-drive workflow.
+5. HAPI MDM processing may be asynchronous. A successful FHIR write or a
+   temporarily absent link is not proof of resolution. Check all pages of
+   `$mdm-query-links` and the relevant
+   `$mdm-duplicate-golden-resources` results; release only after the configured
+   acceptance checks identify one unambiguous MATCH and no unresolved
+   conflicting links. Retry transient failures separately from manual review.
+6. Preserve source lineage and map references consistently to the approved
+   patient identity. Protect MDM operations and review data with least
+   privilege, audit access and decisions, and exclude PHI from operational
+   logs and queue diagnostics.
+
+Separate MDM databases do not automatically share patient links. Decide
+whether the two pipelines use an approved shared identity domain or how their
+identities are reconciled before relying on cross-pipeline deduplication.
+
+The following is an **illustrative, unvalidated** HAPI MDM rules template, not
+a deployed configuration. Replace the placeholder in both locations with the
+same approved URI and validate it against the pinned HAPI JPA version before
+use. `candidateSearchParams` finds possible candidates; the `IDENTIFIER`
+matcher and EID configuration restrict the intended identity decision to the
+configured enterprise system. HAPI EID behavior must also be tested because it
+can establish links independently of the ordinary `matchResultMap`.
+
+```json
+{
+  "version": "1",
+  "mdmTypes": ["Patient"],
+  "candidateSearchParams": [
+    { "resourceType": "Patient", "searchParams": ["identifier"] }
+  ],
+  "matchFields": [
+    {
+      "name": "enterprise-identifier",
+      "resourceType": "Patient",
+      "resourcePath": "identifier",
+      "matcher": {
+        "algorithm": "IDENTIFIER",
+        "identifierSystem": "https://example.invalid/replace-with-approved-system",
+        "exact": true
+      }
+    }
+  ],
+  "matchResultMap": {
+    "enterprise-identifier": "MATCH"
+  },
+  "eidSystems": {
+    "Patient": "https://example.invalid/replace-with-approved-system"
+  }
+}
+```
+
+By default HAPI's EID settings prevent changing an existing EID and multiple
+EIDs from the same system on a resource. Confirm these settings in the chosen
+version and define a governed correction process rather than disabling them
+without review. Manual MDM link decisions take precedence over automatic
+links. A `POSSIBLE_MATCH` or `POSSIBLE_DUPLICATE` requires review; `NO_MATCH`
+alone is not permission to promote a record. HAPI may create a new Golden
+Patient for a new identity, but the integration must verify the resulting
+link and required identifier before release.
+
+Before any clinical use, test with synthetic records for same and different
+systems and values, missing and multiple identifiers, casing and formatting,
+concurrent arrivals, delayed links, duplicates, manual decisions, corrections,
+and replay. Verify exact comparison behavior and review conflicting EIDs
+against the selected HAPI version. Preserve Gold's existing source-version
+ordering and replay protections when writing through FHIR APIs: HAPI's own
+`meta.lastUpdated` is not a substitute for the source event version.
+
+References: [HAPI MDM overview](https://hapifhir.io/hapi-fhir/docs/server_jpa_mdm/mdm.html),
+[rules](https://hapifhir.io/hapi-fhir/docs/server_jpa_mdm/mdm_rules.html),
+[enterprise identifiers](https://hapifhir.io/hapi-fhir/docs/server_jpa_mdm/mdm_eid.html),
+and [operations](https://hapifhir.io/hapi-fhir/docs/server_jpa_mdm/mdm_operations.html).
+
 ### Azure Data Lake Storage Gen2
 
 ADLS Gen2 provides the durable medallion store.
